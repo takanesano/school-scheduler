@@ -470,6 +470,74 @@ def test_promoted_objective_cap_reported_in_status(client):
     assert codes == {"objective_cap_exceeded"}
 
 
+def test_user_sets_one_class_per_day_as_always_active(client):
+    """End-to-end user flow: dragging 'One lesson per day per student'
+    above the divider stores objective_caps.student_double_day = 0; the
+    generated schedule must then have no two-lesson day, and any
+    schedule that acquires one is flagged in Status."""
+    seed_world(client)
+    client.post("/api/student_needs",
+                json={"student_id": "s1", "subject_id": "math",
+                      "sessions": 2})
+    r = client.put("/api/settings",
+                   json={"objective_caps": {"student_double_day": 0}})
+    assert r.json()["objective_caps"] == {"student_double_day": 0}
+
+    assert client.post("/api/schedule/generate",
+                       json={}).json()["complete"] is True
+    body = client.get("/api/schedule").json()
+    assert body["violations"] == []
+    assert body["objective"]["student_double_days"] == 0
+    # the two sessions landed on different days
+    days = {l["timeslot_id"][:3] for l in body["lessons"]}
+    assert len(body["lessons"]) == 2 and len(days) == 2
+
+    # force both onto one day (legal under the base rules: consecutive)
+    lid = body["lessons"][0]["id"]
+    tue = next(l for l in body["lessons"] if l["timeslot_id"] == "tue-1")
+    client.patch(f"/api/lessons/{tue['id']}",
+                 json={"timeslot_id": "mon-2", "force": True})
+    codes = {v["code"] for v in client.get("/api/schedule").json()["violations"]}
+    assert codes == {"objective_cap_exceeded"}
+    assert lid  # silence unused warning
+
+
+ALWAYS_ACTIVE_CASES = [
+    # (term, value in the fixture schedule below)
+    ("student_double_day", 1),
+    ("teacher_slot_spread", 3),
+    ("teacher_working_day", 2),
+    ("teacher_day_spread", 2),
+]
+
+
+@pytest.mark.parametrize("term,value", ALWAYS_ACTIVE_CASES)
+def test_any_condition_can_be_always_active(client, term, value):
+    """Nothing is hard-coded: EVERY objective term can be set as always
+    active through settings, and each is enforced/reported generically.
+    Fixture schedule: t1 teaches s1 twice on Mon (consecutive) and s2
+    once on Tue; t2 exists, teaches math, but has no lessons."""
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    client.post("/api/teacher_availability",
+                json={"teacher_id": "t2", "timeslot_id": "tue-1"})
+    for st, slot in (("s1", "mon-1"), ("s1", "mon-2"), ("s2", "tue-1")):
+        assert client.post("/api/lessons", json={
+            "student_id": st, "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1", "timeslot_id": slot}).status_code == 200
+    assert client.get("/api/schedule").json()["violations"] == []
+
+    # cap just below the schedule's value -> violation reported
+    client.put("/api/settings", json={"objective_caps": {term: value - 1}})
+    vs = client.get("/api/schedule").json()["violations"]
+    assert {v["code"] for v in vs} == {"objective_cap_exceeded"}, term
+    # cap at the value -> clean again
+    client.put("/api/settings", json={"objective_caps": {term: value}})
+    assert client.get("/api/schedule").json()["violations"] == []
+
+
 def test_generate_v2_accepts_small_budget(client):
     pytest.importorskip("ortools")
     seed_world(client)

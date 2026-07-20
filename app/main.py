@@ -612,9 +612,9 @@ def update_lesson(lesson_id: int, patch: LessonPatch,
         fields.get("timeslot_id", target.timeslot_id),
         id=lesson_id)
     new_schedule = [l for l in lessons if l.id != lesson_id] + [updated]
-    new_violations = [v for v in _validate_with_settings(conn, data,
-                                                        new_schedule)
-                      if lesson_id in v.lesson_ids]
+    new_violations = [
+        v for v in _validate_with_settings(conn, data, new_schedule)
+        if lesson_id in v.lesson_ids]
     if new_violations and not patch.force:
         raise HTTPException(409, detail={"violations": _violations_json(new_violations)})
     with conn:
@@ -731,9 +731,24 @@ def list_entity(entity: str, conn: sqlite3.Connection = Depends(get_conn)):
 
 # ---------------------------------------------------------------- static UI
 
+class NoCacheStaticFiles(StaticFiles):
+    """Static files with `Cache-Control: no-cache`.
+
+    Browsers must revalidate before reusing a cached copy, so UI updates
+    show up on a normal refresh instead of requiring a hard refresh.
+    (ETags still make unchanged files cheap 304s.)
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 @app.get("/", include_in_schema=False)
 def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html",
+                        headers={"Cache-Control": "no-cache"})
 
 
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/static", NoCacheStaticFiles(directory=STATIC_DIR), name="static")

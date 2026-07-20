@@ -220,6 +220,34 @@ def test_cpsat_enforces_promoted_objective_cap():
     assert objective_terms(d, r.lessons)["teacher_slot_spread"] == 0
 
 
+def test_always_active_is_stronger_than_any_priority_order():
+    """The user's scenario: 'one class per student per day' set as ALWAYS
+    ACTIVE — not merely first priority. Even with that condition dragged
+    to the very BOTTOM of the priorities (where the weight order would
+    happily accept a two-lesson day to save a teacher working day),
+    marking it always-active still forbids the two-lesson day."""
+    d = make_data()
+    d.teachers = {"t1": "Tanaka"}
+    d.teacher_subjects = {("t1", "math"), ("t1", "eng")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.student_needs = {("s1", "math"): 1, ("s1", "eng"): 1}
+    demoted = ObjectiveWeights.lexicographic(
+        ["teacher_working_day", "teacher_slot_spread",
+         "teacher_day_spread", "student_double_day"])
+
+    free = solve_v2(d, config=SolverConfig(weights=demoted))
+    assert objective_terms(d, free.lessons)["student_double_day"] == 1
+    assert objective_terms(d, free.lessons)["teacher_working_day"] == 1
+
+    capped = solve_v2(d, config=SolverConfig(
+        weights=demoted, objective_caps={"student_double_day": 0}))
+    assert capped.backend == "cpsat"
+    assert capped.complete
+    assert objective_terms(d, capped.lessons)["student_double_day"] == 0
+    # the price (a second working day) was paid, as it must be
+    assert objective_terms(d, capped.lessons)["teacher_working_day"] == 2
+
+
 def test_cpsat_higher_day_cap_contiguous_triple():
     d = make_data(n_slots_per_day=4, days=("Mon",))
     d.subjects["sci"] = "Science"
