@@ -104,11 +104,17 @@ weeks and marks non-term days `in_term: false`.
   must be fetched with the same `one_subject_session_per_day` value the
   schedule was generated with, or H8 false-positives appear.
 
-- `app/solver_v2.py` is a SKELETON for the tailored weight-driven solver
-  (CP-SAT backend, minimal-disruption rescheduling) — plan and phasing in
-  docs/solver-v2-plan.md. `solve_v2` currently delegates to the v1
-  pipeline; the other entry points raise NotImplementedError on purpose.
-  Do not wire v2 into the API until Phase 2's validation gate exists.
+- `app/solver_v2.py` is the IMPLEMENTED weight-driven CP-SAT solver
+  (docs/solver-v2-plan.md). Key invariants: `solve_v2` always runs the
+  v1 pipeline too and only returns the CP answer when it passes
+  validate+coverage AND has weighted_cost ≤ v1's; determinism comes from
+  `max_deterministic_time` (never rely on wall-clock cutoffs); the v1
+  solution (or reference) is fed as a COMPLETE hint — hint every
+  variable including zeros, partial hints get dropped by CP-SAT.
+  `resolve_minimal_disruption` = reschedule with a dominating
+  changed-lesson weight. Opt-in via `solver: "v2"` on generate / the
+  "exact optimizer" checkbox; ortools is an optional dependency (module
+  degrades to v1 without it).
 
 ## Conventions
 

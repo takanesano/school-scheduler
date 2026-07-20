@@ -2,7 +2,8 @@
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const state = { tab: "schedule", keep: false, caution: true,
-                compress: true, calView: "overview", calPerson: null };
+                compress: true, exact: false,
+                calView: "overview", calPerson: null };
 
 const TABS = [
   ["schedule", "Schedule"],
@@ -583,6 +584,12 @@ async function renderSchedule(root) {
         keep existing lessons</label>
       <label><input type="checkbox" id="opt-compress"${state.compress ? " checked" : ""}>
         pack teacher days &amp; balance teachers</label>
+      <label title="Models the whole problem as a constraint program
+        (OR-tools CP-SAT) and optimizes all objectives at once. Slower
+        (a few seconds) but usually strictly better; falls back to the
+        standard solver automatically.">
+        <input type="checkbox" id="opt-exact"${state.exact ? " checked" : ""}>
+        exact optimizer (CP-SAT)</label>
       <button class="action" id="gen">Generate schedule</button>
       <button class="action secondary" id="clear">Clear schedule</button>
     </div>
@@ -594,18 +601,23 @@ async function renderSchedule(root) {
     btn.disabled = true; btn.textContent = "Solving…";
     state.keep = $("#opt-keep", ctrl).checked;
     state.compress = $("#opt-compress", ctrl).checked;
+    state.exact = $("#opt-exact", ctrl).checked;
     try {
       const res = await api("POST", "/api/schedule/generate", {
         keep_existing: state.keep,
         compress_teacher_days: state.compress,
+        solver: state.exact ? "v2" : "v1",
       });
-      if (res.complete) toast(`Complete schedule: ${res.scheduled} lessons`);
-      else toast("Partial schedule — see unscheduled list", true);
+      if (res.complete) {
+        toast(`Complete schedule: ${res.scheduled} lessons`
+          + (state.exact ? ` (${res.backend})` : ""));
+      } else toast("Partial schedule — see unscheduled list", true);
       render();
     } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = "Generate schedule"; }
   };
   $("#opt-keep", ctrl).onchange = (e) => { state.keep = e.target.checked; };
   $("#opt-compress", ctrl).onchange = (e) => { state.compress = e.target.checked; };
+  $("#opt-exact", ctrl).onchange = (e) => { state.exact = e.target.checked; };
   $("#clear", ctrl).onclick = async () => {
     if (!await appConfirm("Delete all scheduled lessons?", "Delete all")) return;
     await api("DELETE", "/api/schedule").catch(e => toast(e.message, true));

@@ -17,6 +17,7 @@ from .scheduler import (Dataset, Lesson, Room, Timeslot, check_input_problems,
                         coverage_report, optimize_teacher_days,
                         schedule_objective, solve, student_day_stats,
                         teacher_day_stats, validate)
+from .solver_v2 import solve_v2
 
 from contextlib import asynccontextmanager
 
@@ -368,6 +369,8 @@ def load_lessons(conn: sqlite3.Connection) -> list[Lesson]:
 class GenerateOptions(BaseModel):
     keep_existing: bool = False
     compress_teacher_days: bool = True
+    solver: str = "v1"       # "v1" (backtracking + local search) or "v2"
+    #                          (CP-SAT exact optimization, falls back to v1)
 
 
 class LessonIn(BaseModel):
@@ -388,16 +391,24 @@ def _violations_json(vs):
 @app.post("/api/schedule/generate")
 def generate_schedule(opts: GenerateOptions,
                       conn: sqlite3.Connection = Depends(get_conn)):
+    if opts.solver not in ("v1", "v2"):
+        raise HTTPException(422, "solver must be 'v1' or 'v2'")
     data = load_dataset(conn)
     problems = check_input_problems(data)
     fixed = load_lessons(conn) if opts.keep_existing else []
-    result = solve(data, fixed_lessons=fixed)
-    if opts.compress_teacher_days:
-        # user-placed lessons carry a DB id and stay pinned; only
-        # solver-generated ones (id None) may be rearranged
-        pinned = [l for l in result.lessons if l.id is not None]
-        generated = [l for l in result.lessons if l.id is None]
-        result.lessons = optimize_teacher_days(data, generated, fixed=pinned)
+    if opts.solver == "v2":
+        # exact CP-SAT optimization; validates its own output and falls
+        # back to the v1 pipeline internally when it cannot do better
+        result = solve_v2(data, fixed_lessons=fixed)
+    else:
+        result = solve(data, fixed_lessons=fixed)
+        if opts.compress_teacher_days:
+            # user-placed lessons carry a DB id and stay pinned; only
+            # solver-generated ones (id None) may be rearranged
+            pinned = [l for l in result.lessons if l.id is not None]
+            generated = [l for l in result.lessons if l.id is None]
+            result.lessons = optimize_teacher_days(data, generated,
+                                                   fixed=pinned)
     with conn:
         conn.execute("DELETE FROM lessons")
         conn.executemany(
@@ -408,6 +419,7 @@ def generate_schedule(opts: GenerateOptions,
     return {
         "complete": result.complete,
         "scheduled": len(result.lessons),
+        "backend": result.backend,
         "unscheduled": [
             {"student_id": st, "subject_id": su, "missing": n}
             for (st, su, n) in result.unscheduled],

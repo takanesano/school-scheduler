@@ -1,33 +1,46 @@
-"""Solver v2 skeleton — tailored, weight-driven schedule optimization.
+"""Solver v2 — exact, weight-driven schedule optimization via CP-SAT.
 
-STATUS: skeleton only. Nothing here is wired into the API yet; the v1
-pipeline (``solve`` + ``optimize_teacher_days``) remains the production
-path. See docs/solver-v2-plan.md for the full design and phasing.
+Where v1 (``scheduler.solve`` + ``optimize_teacher_days``) finds *a* legal
+schedule and then hill-climbs, v2 models the whole problem as a constraint
+program and optimizes a single weighted objective directly with OR-tools
+CP-SAT. See docs/solver-v2-plan.md for the design rationale.
 
-The core ideas this module will implement:
+Model sketch
+------------
+* One boolean variable per feasible (student, subject, timeslot, teacher,
+  room) assignment, pre-filtered by availability and capability. Sessions
+  of one (student, subject) need are interchangeable, so coverage is a
+  plain sum-equality — no symmetric per-session variables.
+* Hard constraints (mirroring the validator's H1–H8): coverage == need,
+  student ≤ 1 per slot, teacher ≤ capacity per slot, room ≤ capacity per
+  slot, student ≤ day-cap per day, and pairwise "no two non-adjacent
+  periods on one student-day" for consecutiveness.
+* Pinned lessons (user-placed, ``fixed_lessons``) are constants folded
+  into every constraint, never variables — they cannot move.
+* Soft objectives from ``SolverConfig.weights``: two-lesson-day
+  indicators, teacher working-day indicators, max−min load and day-count
+  spreads over eligible teachers, and (for rescheduling) a penalty per
+  lesson changed from a reference schedule.
 
-* one ``SolverConfig`` describing hard-constraint parameters and
-  per-objective WEIGHTS (replacing v1's fixed lexicographic order);
-* a single weighted cost function shared by every backend;
-* a CP-SAT backend (optional ``ortools`` dependency) that optimizes the
-  whole problem at once instead of feasibility-then-hill-climb;
-* minimal-disruption rescheduling (penalize diffs against the current
-  schedule) for mid-term changes.
-
-Invariants (enforced by ``solve_v2``, never left to the backend):
-* every result is re-checked with ``scheduler.validate`` — the validator
-  stays the single source of truth; an invalid backend result is
-  discarded in favor of the v1 answer;
-* deterministic: same input + config → same schedule;
-* pinned lessons are never moved;
-* exactly ``sessions`` lessons per (student, subject).
+Safety contract
+---------------
+``solve_v2`` ALWAYS runs the v1 pipeline too, and only returns the CP-SAT
+answer when it (a) passes ``scheduler.validate`` and ``coverage_report``
+cleanly and (b) has a weighted cost no worse than v1's. If OR-tools is
+not installed, the model is infeasible (e.g. force-saved pinned lessons
+already break a rule), or the time budget runs out, the v1 result is
+returned unchanged. Determinism: fixed seed, one worker, sorted model
+construction.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field, replace
 
-from .scheduler import (Dataset, Lesson, SolveResult, optimize_teacher_days,
-                        solve)
+from .scheduler import (Dataset, Lesson, SolveResult, _slot_sort_key,
+                        coverage_report, eligible_teachers,
+                        optimize_teacher_days, solve, student_double_days,
+                        teacher_day_stats, validate)
 
 
 @dataclass(frozen=True)
@@ -36,7 +49,8 @@ class ObjectiveWeights:
 
     The v1 lexicographic order is expressed as dominating magnitudes via
     :meth:`lexicographic`. Schools that trade objectives off against each
-    other set comparable weights instead.
+    other set comparable weights instead. CP-SAT needs integer
+    coefficients, so weights are rounded to ints inside the model.
     """
 
     student_double_day: float = 0.0   # per (student, day) with 2 lessons
@@ -64,39 +78,49 @@ class SolverConfig:
     require_consecutive: bool = True  # H8: two-a-day must be adjacent
     weights: ObjectiveWeights = field(
         default_factory=ObjectiveWeights.lexicographic)
-    time_limit_seconds: float = 10.0  # budget for the optimizing backend
+    # CP-SAT budget. deterministic_time is the primary cutoff: it is
+    # measured in CP-SAT's reproducible work units, so the same input
+    # always stops at the same point → identical schedules run-to-run
+    # even when optimality is not proven. time_limit_seconds is only a
+    # wall-clock safety net.
+    deterministic_time: float = 8.0
+    time_limit_seconds: float = 60.0
     random_seed: int = 0              # fixed for determinism
+
+
+def objective_terms(data: Dataset, lessons: list[Lesson],
+                    reference: list[Lesson] | None = None) -> dict[str, int]:
+    """The named objective terms, evaluated on a concrete schedule."""
+    stats = teacher_day_stats(data, lessons)
+    elig = eligible_teachers(data)
+    loads = [stats[t]["lessons"] for t in elig if t in stats]
+    days = [len(stats[t]["days"]) for t in elig if t in stats]
+    changed = 0
+    if reference is not None:
+        key = (lambda l: (l.student_id, l.subject_id, l.teacher_id,
+                          l.room_id, l.timeslot_id))
+        changed = sum((Counter(map(key, reference))
+                       - Counter(map(key, lessons))).values())
+    return {
+        "student_double_day": student_double_days(data, lessons),
+        "teacher_slot_spread": (max(loads) - min(loads)) if loads else 0,
+        "teacher_working_day": sum(len(s["days"]) for s in stats.values()),
+        "teacher_day_spread": (max(days) - min(days)) if days else 0,
+        "changed_lesson": changed,
+    }
 
 
 def weighted_cost(data: Dataset, lessons: list[Lesson],
                   config: SolverConfig,
                   reference: list[Lesson] | None = None) -> float:
-    """Single scalar cost shared by all backends (Phase 1).
-
-    Will subsume ``scheduler.schedule_objective``: each objective term is
-    computed as today, then combined with ``config.weights`` instead of
-    tuple comparison. ``reference`` feeds the changed-lesson term for
-    minimal-disruption rescheduling.
-    """
-    raise NotImplementedError("solver v2 phase 1 — not implemented yet")
+    """Single scalar cost shared by every backend."""
+    terms = objective_terms(data, lessons, reference)
+    return sum(getattr(config.weights, name) * value
+               for name, value in terms.items())
 
 
-def solve_v2(data: Dataset, config: SolverConfig | None = None,
-             fixed_lessons: list[Lesson] | None = None,
-             reference: list[Lesson] | None = None) -> SolveResult:
-    """Tailored solve: optimize the weighted cost directly (Phase 2).
-
-    Contract:
-    * tries the best available backend (CP-SAT when ``ortools`` is
-      importable, otherwise the v1 pipeline);
-    * ALWAYS validates the winning schedule with ``scheduler.validate``
-      and falls back to the v1 result if the backend misbehaves;
-    * never returns a worse ``weighted_cost`` than the v1 pipeline.
-
-    Until Phase 2 lands this simply runs the v1 pipeline, so callers can
-    already program against the final signature.
-    """
-    config = config or SolverConfig()
+def _v1_pipeline(data: Dataset, config: SolverConfig,
+                 fixed_lessons: list[Lesson] | None) -> SolveResult:
     result = solve(data, fixed_lessons=fixed_lessons,
                    teacher_capacity=config.teacher_capacity)
     if result.complete:
@@ -105,35 +129,241 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
         result.lessons = optimize_teacher_days(
             data, movable, fixed=pinned,
             teacher_capacity=config.teacher_capacity)
-    # Phase 2 will re-validate backend output here (validate == []) and
-    # fall back to this v1 result when the backend misbehaves.
     return result
 
 
-def _solve_cpsat(data: Dataset, config: SolverConfig,
-                 fixed_lessons: list[Lesson],
-                 reference: list[Lesson] | None) -> SolveResult | None:
-    """CP-SAT backend (Phase 2). Returns None when ortools is missing or
-    the time budget produced nothing better than the v1 answer.
+def solve_v2(data: Dataset, config: SolverConfig | None = None,
+             fixed_lessons: list[Lesson] | None = None,
+             reference: list[Lesson] | None = None) -> SolveResult:
+    """Optimize the weighted cost directly; never worse than v1.
 
-    Model sketch (see docs/solver-v2-plan.md):
-    * bool var per feasible (need-session, teacher, slot, room) tuple,
-      pre-filtered by availability/capability;
-    * coverage == need, student ≤1/slot, teacher ≤capacity/slot,
-      room ≤capacity/slot, student ≤day-cap/day, adjacency implications,
-      pinned lessons fixed;
-    * minimize the linearized ``weighted_cost``.
+    Returns the CP-SAT schedule only when it is fully valid, covers every
+    need exactly, and its ``weighted_cost`` is ≤ the v1 pipeline's.
+    Otherwise (OR-tools missing, model infeasible — e.g. force-saved
+    pinned lessons already violate a rule — or time budget too small) the
+    v1 result is returned; ``SolveResult.backend`` says which one won.
     """
-    raise NotImplementedError("solver v2 phase 2 — not implemented yet")
+    config = config or SolverConfig()
+    pinned = list(fixed_lessons or [])
+    v1 = _v1_pipeline(data, config, pinned)
+    # warm start: the reference schedule (when rescheduling) or v1's
+    # answer — CP-SAT then spends its whole budget improving, and a
+    # timeout can rarely be worse than v1
+    hint = reference if reference is not None else v1.lessons
+    cp = _solve_cpsat(data, config, pinned, reference, hint)
+    if cp is None:
+        return v1
+    if (validate(data, cp.lessons, config.teacher_capacity)
+            or coverage_report(data, cp.lessons)):
+        return v1                      # backend misbehaved: v1 wins
+    if v1.complete and (weighted_cost(data, cp.lessons, config, reference)
+                        > weighted_cost(data, v1.lessons, config, reference)):
+        return v1                      # time budget produced nothing better
+    return cp
 
 
 def resolve_minimal_disruption(data: Dataset, current: list[Lesson],
                                config: SolverConfig | None = None
                                ) -> SolveResult:
-    """Rescheduling after mid-term input changes (Phase 3).
+    """Reschedule after mid-term input changes, moving as little as
+    possible.
 
-    Re-solves with ``current`` as the reference schedule and a high
-    ``changed_lesson`` weight, so the result stays valid under the new
-    inputs while moving as few lessons as possible.
+    Re-solves with ``current`` as the reference schedule; every changed
+    lesson costs ``weights.changed_lesson`` (raised to a dominating value
+    when left at 0), so the result stays valid under the new inputs while
+    preserving as much of ``current`` as it can. Requires OR-tools — the
+    v1 fallback cannot honor the reference and simply re-solves.
     """
-    raise NotImplementedError("solver v2 phase 3 — not implemented yet")
+    config = config or SolverConfig()
+    if config.weights.changed_lesson <= 0:
+        config = replace(config, weights=replace(
+            config.weights, changed_lesson=100_000_000.0))
+    return solve_v2(data, config=config, reference=current)
+
+
+def _solve_cpsat(data: Dataset, config: SolverConfig,
+                 pinned: list[Lesson],
+                 reference: list[Lesson] | None,
+                 hint: list[Lesson] | None = None) -> SolveResult | None:
+    """Build and solve the CP-SAT model. None = defer to v1."""
+    try:
+        from ortools.sat.python import cp_model
+    except ImportError:
+        return None
+
+    slots = sorted(data.timeslots.values(), key=_slot_sort_key)
+    room_ids = sorted(data.rooms)
+    teachers_for: dict[str, list[str]] = defaultdict(list)
+    for (t, su) in sorted(data.teacher_subjects):
+        teachers_for[su].append(t)
+
+    # needs left after pinned lessons are counted
+    pinned_count = Counter((l.student_id, l.subject_id) for l in pinned)
+    remaining: dict[tuple[str, str], int] = {}
+    for (st, su), need in sorted(data.student_needs.items()):
+        if st not in data.students or su not in data.subjects:
+            return None                # unschedulable need: v1 reports it
+        rem = need - pinned_count.get((st, su), 0)
+        if rem > 0:
+            remaining[(st, su)] = rem
+
+    m = cp_model.CpModel()
+    x: dict[tuple[str, str, str, str, str], object] = {}
+    for (st, su), rem in remaining.items():
+        combo_vars = []
+        for s in slots:
+            if (st, s.id) not in data.student_availability:
+                continue
+            for t in teachers_for.get(su, []):
+                if (t, s.id) not in data.teacher_availability:
+                    continue
+                for r in room_ids:
+                    v = m.NewBoolVar(f"x[{st},{su},{s.id},{t},{r}]")
+                    x[(st, su, s.id, t, r)] = v
+                    combo_vars.append(v)
+        m.Add(sum(combo_vars) == rem)  # coverage: exactly `sessions`
+
+    # ---- occupancy constants contributed by pinned lessons
+    pin_student_slot = Counter((l.student_id, l.timeslot_id) for l in pinned)
+    pin_teacher_slot = Counter((l.teacher_id, l.timeslot_id) for l in pinned)
+    pin_room_slot = Counter((l.room_id, l.timeslot_id) for l in pinned)
+    pin_sdp: Counter = Counter()       # (student, date, period)
+    pin_teacher_day: Counter = Counter()
+    for l in pinned:
+        slot = data.timeslots.get(l.timeslot_id)
+        if slot:
+            pin_sdp[(l.student_id, slot.date, slot.period)] += 1
+            pin_teacher_day[(l.teacher_id, slot.date)] += 1
+
+    # ---- variable indexes
+    by_student_slot = defaultdict(list)
+    by_teacher_slot = defaultdict(list)
+    by_room_slot = defaultdict(list)
+    by_sdp = defaultdict(list)         # (student, date, period)
+    by_teacher_day = defaultdict(list)
+    by_teacher = defaultdict(list)
+    for (st, su, sid, t, r), v in x.items():
+        slot = data.timeslots[sid]
+        by_student_slot[(st, sid)].append(v)
+        by_teacher_slot[(t, sid)].append(v)
+        by_room_slot[(r, sid)].append(v)
+        by_sdp[(st, slot.date, slot.period)].append(v)
+        by_teacher_day[(t, slot.date)].append(v)
+        by_teacher[t].append(v)
+
+    # ---- hard constraints (H5–H8; H1–H4 are enforced by var filtering)
+    for (st, sid), vs in sorted(by_student_slot.items()):
+        m.Add(sum(vs) <= 1 - pin_student_slot.get((st, sid), 0))
+    for (t, sid), vs in sorted(by_teacher_slot.items()):
+        m.Add(sum(vs) <= config.teacher_capacity
+              - pin_teacher_slot.get((t, sid), 0))
+    for (r, sid), vs in sorted(by_room_slot.items()):
+        m.Add(sum(vs) <= data.rooms[r].capacity
+              - pin_room_slot.get((r, sid), 0))
+
+    # student-day structures: cap and consecutiveness
+    day_periods: dict[str, list[int]] = defaultdict(list)
+    for s in slots:
+        day_periods[s.date].append(s.period)
+    student_days = sorted(
+        {(st, date) for (st, date, _p) in by_sdp}
+        | {(st, date) for (st, date, _p) in pin_sdp})
+    dd_vars = []
+    w = config.weights
+    for (st, date) in student_days:
+        periods = sorted(set(day_periods[date]))
+        total = (sum(v for p in periods for v in by_sdp.get((st, date, p), []))
+                 + sum(pin_sdp.get((st, date, p), 0) for p in periods))
+        m.Add(total <= config.student_day_cap)
+        if config.require_consecutive and config.student_day_cap == 2:
+            for i, p in enumerate(periods):
+                for q in periods[i + 1:]:
+                    if q - p == 1:
+                        continue       # adjacent pair: allowed
+                    m.Add(sum(by_sdp.get((st, date, p), []))
+                          + sum(by_sdp.get((st, date, q), []))
+                          + pin_sdp.get((st, date, p), 0)
+                          + pin_sdp.get((st, date, q), 0) <= 1)
+        if w.student_double_day:
+            dd = m.NewBoolVar(f"dd[{st},{date}]")
+            # total ≥ 2 forces dd = 1
+            m.Add(total <= 1 + (config.student_day_cap - 1) * dd)
+            dd_vars.append(dd)
+
+    # teacher working-day indicators and per-teacher day counts
+    teacher_days = sorted(set(by_teacher_day) | set(pin_teacher_day))
+    wd_vars = []
+    day_count_of: dict[str, list] = defaultdict(list)
+    for (t, date) in teacher_days:
+        wd = m.NewBoolVar(f"wd[{t},{date}]")
+        cap_day = config.teacher_capacity * len(set(day_periods[date]))
+        m.Add(sum(by_teacher_day.get((t, date), [])) <= cap_day * wd)
+        if pin_teacher_day.get((t, date), 0):
+            m.Add(wd == 1)
+        wd_vars.append(wd)
+        day_count_of[t].append(wd)
+
+    # ---- objective
+    total_sessions = sum(remaining.values()) + len(pinned)
+    obj = []
+    if w.student_double_day:
+        obj += [int(round(w.student_double_day)) * dd for dd in dd_vars]
+    if w.teacher_working_day:
+        obj += [int(round(w.teacher_working_day)) * wd for wd in wd_vars]
+    elig = eligible_teachers(data)
+    pin_teacher_total = Counter(l.teacher_id for l in pinned)
+    if w.teacher_slot_spread and elig:
+        lmax = m.NewIntVar(0, total_sessions, "load_max")
+        lmin = m.NewIntVar(0, total_sessions, "load_min")
+        for t in elig:
+            load = sum(by_teacher[t]) + pin_teacher_total.get(t, 0)
+            m.Add(lmax >= load)
+            m.Add(lmin <= load)
+        obj.append(int(round(w.teacher_slot_spread)) * (lmax - lmin))
+    if w.teacher_day_spread and elig:
+        n_days = len(day_periods)
+        dmax = m.NewIntVar(0, n_days, "days_max")
+        dmin = m.NewIntVar(0, n_days, "days_min")
+        for t in elig:
+            count = sum(day_count_of.get(t, []))
+            m.Add(dmax >= count)
+            m.Add(dmin <= count)
+        obj.append(int(round(w.teacher_day_spread)) * (dmax - dmin))
+    if w.changed_lesson and reference:
+        seen = set()
+        for l in reference:
+            key = (l.student_id, l.subject_id, l.timeslot_id,
+                   l.teacher_id, l.room_id)
+            if key in x and key not in seen:
+                seen.add(key)
+                obj.append(int(round(w.changed_lesson)) * (1 - x[key]))
+            # reference lessons with no matching variable are unavoidably
+            # changed — a constant cost that cannot affect the argmin
+    m.Minimize(sum(obj) if obj else 0)
+
+    if hint:
+        # hint EVERY variable (1 for hinted lessons, 0 otherwise): a
+        # complete hint is validated directly, while a partial one needs
+        # a completion search that CP-SAT abandons quickly
+        hint_keys = {(l.student_id, l.subject_id, l.timeslot_id,
+                      l.teacher_id, l.room_id) for l in hint}
+        for key, var in sorted(x.items()):
+            m.AddHint(var, 1 if key in hint_keys else 0)
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_deterministic_time = config.deterministic_time
+    solver.parameters.max_time_in_seconds = config.time_limit_seconds
+    solver.parameters.random_seed = config.random_seed
+    solver.parameters.num_workers = 1
+    solver.parameters.repair_hint = True   # for slightly-stale hints
+    status = solver.Solve(m)
+    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        return None
+
+    lessons = list(pinned)
+    for (st, su, sid, t, r), v in sorted(x.items()):
+        if solver.Value(v):
+            lessons.append(Lesson(st, su, t, r, sid))
+    return SolveResult(lessons, [], complete=True,
+                       nodes_explored=int(solver.NumBranches()),
+                       backend="cpsat")

@@ -231,6 +231,7 @@ class SolveResult:
     unscheduled: list[tuple[str, str, int]]  # (student, subject, missing count)
     complete: bool
     nodes_explored: int = 0
+    backend: str = "v1"                      # which solver produced this
 
 
 class _State:

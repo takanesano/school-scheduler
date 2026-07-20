@@ -320,6 +320,27 @@ def test_generate_compresses_teacher_days(client):
     assert body["objective"]["total_days"] == 1
 
 
+def test_generate_with_v2_solver(client):
+    pytest.importorskip("ortools")
+    seed_world(client)
+    for st, n in (("s1", 2), ("s2", 1)):
+        client.post("/api/student_needs",
+                    json={"student_id": st, "subject_id": "math",
+                          "sessions": n})
+    r = client.post("/api/schedule/generate", json={"solver": "v2"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["complete"] is True
+    assert body["backend"] == "cpsat"
+    sched = client.get("/api/schedule").json()
+    assert sched["violations"] == [] and sched["coverage"] == []
+
+
+def test_generate_rejects_unknown_solver(client):
+    r = client.post("/api/schedule/generate", json={"solver": "v3"})
+    assert r.status_code == 422
+
+
 def test_input_problem_diagnostics(client):
     seed_world(client)
     client.post("/api/subjects", json={"id": "eng", "name": "English"})

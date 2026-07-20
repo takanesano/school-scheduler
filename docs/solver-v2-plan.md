@@ -1,8 +1,25 @@
 # Solver v2 — plan for a more tailored scheduling algorithm
 
-Status: **plan + skeleton only** (see [app/solver_v2.py](../app/solver_v2.py)).
-The v1 pipeline (`solve` → `optimize_teacher_days`) stays the default until
-v2 demonstrably matches it on correctness and beats it on objective quality.
+Status: **Phases 1–3 implemented** in [app/solver_v2.py](../app/solver_v2.py)
+(CP-SAT via OR-tools; weighted cost function; minimal-disruption
+`resolve_minimal_disruption`). Exposed in the API/UI as an opt-in
+(`solver: "v2"` / the "exact optimizer (CP-SAT)" checkbox); the v1
+pipeline remains the default. Phase 4 (native fallback improvements) is
+not planned unless the ortools dependency becomes a problem.
+
+Implementation notes beyond the original plan:
+
+- Determinism uses CP-SAT's `max_deterministic_time` (reproducible work
+  units) as the primary cutoff, with `max_time_in_seconds` only as a
+  wall-clock safety net — a plain wall-clock limit made timeout
+  incumbents unreproducible.
+- The v1 solution (or the reference schedule when rescheduling) is fed
+  in as a COMPLETE solution hint — every variable hinted, zeros included.
+  Partial hints (positives only) get abandoned by CP-SAT's hint-repair
+  and were effectively ignored.
+- Measured on sample_data: v2 reaches objective terms
+  (double-days 0, slot spread 1, teacher-days 14, day spread 1) vs v1's
+  (0, 1, 18, 1) — four fewer teacher working days.
 
 ## Why v2
 
@@ -30,6 +47,7 @@ Model the whole problem as a single weighted optimization and solve it
 exactly (small instances) or near-exactly with a principled search:
 
 ### Phase 1 — objective/constraint registry (pure refactor)
+
 - Introduce `SolverConfig` (see skeleton): hard-constraint toggles/values
   (teacher capacity, student day cap, consecutiveness) and per-objective
   weights, with `lexicographic()` presets reproducing v1 exactly.
@@ -38,6 +56,7 @@ exactly (small instances) or near-exactly with a principled search:
   with dominating magnitudes. Regression-test equality against v1 tuples.
 
 ### Phase 2 — CP-SAT model (preferred backend)
+
 - Optional dependency `ortools`; module degrades gracefully when absent.
 - Variables: one boolean per feasible (need-session, teacher, slot, room)
   assignment, pre-filtered by availability/capability (same pruning as
@@ -56,6 +75,7 @@ exactly (small instances) or near-exactly with a principled search:
   whatever the model outputs).
 
 ### Phase 3 — minimal-disruption rescheduling
+
 - `resolve(data, current, changed_inputs) -> SolveResult` with an extra
   objective term: number of lessons that differ from `current` (weighted
   high). Covers "teacher sick on 8/5", "student adds a need mid-term".
@@ -63,12 +83,14 @@ exactly (small instances) or near-exactly with a principled search:
 
 ### Phase 4 — native fallback improvements (no ortools)
 Only if ortools proves unacceptable as a dependency:
+
 - Swap moves (2-opt between teachers/slots) in the local search.
 - Large-neighborhood search: destroy a random day/teacher slice, re-run
   the exact backtracker on the fragment, keep if better.
 - Branch-and-bound on the weighted objective inside `solve` itself.
 
 ## Invariants that must survive v2
+
 - `validate` stays the single source of truth; v2 output is always run
   through it and must come back clean (or the result is rejected and v1's
   answer is used).
@@ -79,6 +101,7 @@ Only if ortools proves unacceptable as a dependency:
   unchanged; v2 is selected by a request option, default off until proven.
 
 ## Test plan
+
 - Golden tests: v2 with lexicographic preset ≥ v1 on every instance in
   the suite (never worse on any objective term, valid, complete).
 - Property test: random small instances (≤6 students) — brute-force

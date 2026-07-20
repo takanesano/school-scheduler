@@ -3,3 +3,4 @@ uvicorn[standard]
 python-multipart
 pytest
 httpx
+ortools   # optional: exact CP-SAT backend for solver v2 (app runs without it)
