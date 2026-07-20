@@ -811,7 +811,6 @@ async function renderSchedule(root) {
     await api("DELETE", "/api/schedule").catch(e => toast(e.message, true));
     render();
   };
-  root.append(ctrl);
 
   const status = el(`<div class="panel"><h2>Status</h2>
     <div class="row">
@@ -862,7 +861,6 @@ async function renderSchedule(root) {
         day-count spread: ${o.day_spread}</p></div>`);
     status.append(wl);
   }
-  root.append(status);
 
   // manual add
   const opt = (arr, label) => arr.map(x =>
@@ -906,7 +904,6 @@ async function renderSchedule(root) {
       }
     }
   };
-  root.append(add);
 
   // calendar of all lessons: delete buttons, violation highlighting, and
   // drag-and-drop between timeslots
@@ -1056,7 +1053,13 @@ async function renderSchedule(root) {
       return box;
     }, dropHook));
   }
+
+  // panel order: work area first (manual add + timetable), then the
+  // review/config panels (status, generate)
+  root.append(add);
   root.append(grid);
+  root.append(status);
+  root.append(ctrl);
 }
 
 // ----------------------------------------------------------------- calendars
