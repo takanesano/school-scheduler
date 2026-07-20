@@ -54,9 +54,10 @@ weeks and marks non-term days `in_term: false`.
   drag list (`state.objOrder`, `#prio-list`) is the source of that order.
 - Hard-constraint SETTINGS persist in the `settings` table (GET/PUT
   /api/settings): teacher_capacity, student_day_cap,
-  require_consecutive, and `objective_caps` (soft objectives promoted to
-  hard "term ≤ bound" caps by dragging a priority card into the hard
-  box). EVERY validate call in main.py goes through
+  require_consecutive, and `objective_caps` (an objective at "priority
+  0" — dragged above the divider in the single rules list — becomes a
+  hard "term ≤ bound" cap; the three scalar settings currently have no
+  UI, API only). EVERY validate call in main.py goes through
   `_validate_with_settings`; H8 is generalized (configurable day cap;
   contiguous-run consecutiveness for any cap). Cap semantics: CP-SAT
   enforces caps as model constraints; v1 cannot — it front-loads capped
