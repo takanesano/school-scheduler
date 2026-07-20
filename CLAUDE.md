@@ -104,6 +104,12 @@ weeks and marks non-term days `in_term: false`.
   must be fetched with the same `one_subject_session_per_day` value the
   schedule was generated with, or H8 false-positives appear.
 
+- `app/solver_v2.py` is a SKELETON for the tailored weight-driven solver
+  (CP-SAT backend, minimal-disruption rescheduling) — plan and phasing in
+  docs/solver-v2-plan.md. `solve_v2` currently delegates to the v1
+  pipeline; the other entry points raise NotImplementedError on purpose.
+  Do not wire v2 into the API until Phase 2's validation gate exists.
+
 ## Conventions
 
 - Line length 100, E741 ignored (`l` = lesson) — see setup.cfg.
