@@ -274,7 +274,8 @@ def test_schedule_reports_teacher_stats(client):
     body = client.get("/api/schedule").json()
     assert body["teacher_stats"] == [
         {"teacher_id": "t1", "name": "Tanaka", "lessons": 2, "days": 2}]
-    assert body["objective"] == {"student_double_days": 0, "slot_spread": 0,
+    assert body["objective"] == {"student_double_days": 0,
+                                 "student_day_gaps": 0, "slot_spread": 0,
                                  "total_days": 2, "day_spread": 0}
     assert body["student_stats"] == [
         {"student_id": "s1", "name": "Aoi", "lessons": 1, "days": 1,
@@ -375,8 +376,9 @@ def test_generate_honors_objective_order(client):
         client.post("/api/student_needs",
                     json={"student_id": st, "subject_id": "math",
                           "sessions": 1})
-    days_first = ["student_double_day", "teacher_working_day",
-                  "teacher_slot_spread", "teacher_day_spread"]
+    days_first = ["student_double_day", "student_day_gap",
+                  "teacher_working_day", "teacher_slot_spread",
+                  "teacher_day_spread"]
     r = client.post("/api/schedule/generate",
                     json={"objective_order": days_first})
     assert r.json()["complete"] is True
@@ -391,15 +393,13 @@ def test_generate_honors_objective_order(client):
 def test_settings_defaults_and_roundtrip(client):
     assert client.get("/api/settings").json() == {
         "teacher_capacity": 2, "student_day_cap": 2,
-        "require_consecutive": True, "objective_caps": {}}
+        "objective_caps": {"student_day_gap": 0}}
     r = client.put("/api/settings", json={
         "teacher_capacity": 1, "student_day_cap": 3,
-        "require_consecutive": False,
         "objective_caps": {"teacher_slot_spread": 1}})
     assert r.status_code == 200
     assert client.get("/api/settings").json() == {
         "teacher_capacity": 1, "student_day_cap": 3,
-        "require_consecutive": False,
         "objective_caps": {"teacher_slot_spread": 1}}
 
 
@@ -536,6 +536,79 @@ def test_any_condition_can_be_always_active(client, term, value):
     # cap at the value -> clean again
     client.put("/api/settings", json={"objective_caps": {term: value}})
     assert client.get("/api/schedule").json()["violations"] == []
+
+
+@pytest.mark.parametrize("legacy,expect_gap_cap", [("1", True), ("0", False)])
+def test_legacy_require_consecutive_migrates_once(tmp_path, legacy,
+                                                  expect_gap_cap):
+    """DBs written before the consecutiveness rule became a draggable
+    condition stored a `require_consecutive` boolean. On startup its
+    intent folds into objective_caps (keeping existing caps) and the
+    legacy row is deleted, so a later demotion is never re-overridden."""
+    from app import db as appdb
+    db_path = tmp_path / "legacy.db"
+    appdb.init_db(db_path)
+    conn = appdb.connect(db_path)
+    with conn:
+        conn.executemany("INSERT INTO settings (key, value) VALUES (?, ?)", [
+            ("require_consecutive", legacy),
+            ("objective_caps", '{"student_double_day": 0}')])
+    conn.close()
+    app.state.db_path = db_path
+    try:
+        with TestClient(app) as c:
+            caps = c.get("/api/settings").json()["objective_caps"]
+            expected = {"student_double_day": 0}
+            if expect_gap_cap:
+                expected["student_day_gap"] = 0
+            assert caps == expected
+            # demote, then "restart": the migration must not resurrect it
+            c.put("/api/settings", json={"objective_caps": {}})
+        with TestClient(app) as c:
+            assert c.get("/api/settings").json()["objective_caps"] == {}
+    finally:
+        del app.state.db_path
+
+
+def test_consecutiveness_is_a_demotable_condition(client):
+    """'Multiple lessons on a day must be consecutive' is a draggable
+    condition like any other. s1 is only free Mon P1 and Mon P3, and
+    needs two sessions — a consecutive pair is impossible.
+
+    While the condition is always active (the default: cap 0) the
+    schedule stays incomplete. Demoting it below the divider (removing
+    the cap) lets the gap through: schedule complete, no violations, and
+    the gap is COUNTED in the objective metrics instead."""
+    seed_world(client)
+    client.post("/api/timeslots", json={"id": "mon-3", "date": "2026-07-27",
+                                        "period": 3})
+    client.post("/api/teacher_availability",
+                json={"teacher_id": "t1", "timeslot_id": "mon-3"})
+    client.post("/api/student_availability",
+                json={"student_id": "s1", "timeslot_id": "mon-3"})
+    # s1: only Mon P1 and Mon P3 remain
+    for slot in ("mon-2", "tue-1"):
+        client.delete(f"/api/student_availability?student_id=s1"
+                      f"&timeslot_id={slot}")
+    client.post("/api/student_needs",
+                json={"student_id": "s1", "subject_id": "math",
+                      "sessions": 2})
+
+    # default settings: the condition is always active -> incomplete
+    assert client.get("/api/settings").json()["objective_caps"] == \
+        {"student_day_gap": 0}
+    body = client.post("/api/schedule/generate", json={}).json()
+    assert body["complete"] is False
+
+    # demote the condition (what dragging it below the divider does)
+    client.put("/api/settings", json={"objective_caps": {}})
+    body = client.post("/api/schedule/generate", json={}).json()
+    assert body["complete"] is True
+    sched = client.get("/api/schedule").json()
+    assert sched["violations"] == []                 # gap is legal now
+    assert sched["objective"]["student_day_gaps"] == 1   # ...but visible
+    periods = sorted(l["timeslot_id"] for l in sched["lessons"])
+    assert periods == ["mon-1", "mon-3"]
 
 
 def test_generate_v2_accepts_small_budget(client):

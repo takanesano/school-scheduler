@@ -3,6 +3,7 @@
 const $ = (sel, el = document) => el.querySelector(sel);
 const OBJ_LABELS = {
   student_double_day: "One lesson per day per student",
+  student_day_gap: "Multiple lessons on a day must be consecutive",
   teacher_slot_spread: "Even lesson counts across teachers",
   teacher_working_day: "Few teacher working days",
   teacher_day_spread: "Even working-day counts across teachers",
@@ -602,8 +603,7 @@ async function renderSchedule(root) {
               <li>🔒 a teacher teaches at most ${settings.teacher_capacity}
                 students per timeslot</li>
               <li>🔒 a student has at most ${settings.student_day_cap} lessons
-                per day${settings.require_consecutive
-                  ? ", in consecutive periods" : ""}</li>
+                per day</li>
             </ul>
             <ul id="hard-objs"></ul>
           </div>
@@ -648,8 +648,9 @@ async function renderSchedule(root) {
   // below are the soft priorities 1..n. Dragging across the divider
   // changes which side a card is on.
   const caps = settings.objective_caps || {};
-  const CAP_DEFAULTS = { student_double_day: 0, teacher_slot_spread: 1,
-                         teacher_working_day: 30, teacher_day_spread: 1 };
+  const CAP_DEFAULTS = { student_double_day: 0, student_day_gap: 0,
+                         teacher_slot_spread: 1, teacher_working_day: 30,
+                         teacher_day_spread: 1 };
   let dragKey = null;
 
   async function putCaps(newCaps) {
@@ -657,7 +658,6 @@ async function renderSchedule(root) {
       await api("PUT", "/api/settings", {
         teacher_capacity: settings.teacher_capacity,
         student_day_cap: settings.student_day_cap,
-        require_consecutive: settings.require_consecutive,
         objective_caps: newCaps,
       });
       render();   // everything revalidates against the new rules
@@ -856,6 +856,7 @@ async function renderSchedule(root) {
               : "—"}</td></tr>`).join("")
       }</tbody></table></div>
       <p class="muted">Student days with two lessons: ${o.student_double_days} ·
+        with non-consecutive lessons: ${o.student_day_gaps} ·
         lesson-count spread between teachers (max−min): ${o.slot_spread} ·
         total teacher working days: ${o.total_days} ·
         day-count spread: ${o.day_spread}</p></div>`);

@@ -48,10 +48,11 @@ def test_lexicographic_weights_dominate_in_order():
 
 def test_lexicographic_weights_follow_custom_order():
     w = ObjectiveWeights.lexicographic(
-        ["teacher_working_day", "student_double_day",
+        ["teacher_working_day", "student_double_day", "student_day_gap",
          "teacher_day_spread", "teacher_slot_spread"])
     assert w.teacher_working_day > w.student_double_day \
-        > w.teacher_day_spread > w.teacher_slot_spread > 0
+        > w.student_day_gap > w.teacher_day_spread \
+        > w.teacher_slot_spread > 0
     with pytest.raises(ValueError):
         ObjectiveWeights.lexicographic(["student_double_day"])
 
@@ -62,9 +63,9 @@ def test_objective_terms_and_weighted_cost():
                Lesson("s1", "eng", "t1", "r1", "mon-2"),   # 2 on Mon
                Lesson("s2", "eng", "t2", "r1", "tue-1")]
     terms = objective_terms(d, lessons)
-    assert terms == {"student_double_day": 1, "teacher_slot_spread": 1,
-                     "teacher_working_day": 2, "teacher_day_spread": 0,
-                     "changed_lesson": 0}
+    assert terms == {"student_double_day": 1, "student_day_gap": 0,
+                     "teacher_slot_spread": 1, "teacher_working_day": 2,
+                     "teacher_day_spread": 0, "changed_lesson": 0}
     cfg = SolverConfig(weights=ObjectiveWeights(
         student_double_day=10, teacher_slot_spread=5,
         teacher_working_day=1))
@@ -207,7 +208,7 @@ def test_cpsat_enforces_promoted_objective_cap():
     d = make_data()
     d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
     days_first = ObjectiveWeights.lexicographic(
-        ["student_double_day", "teacher_working_day",
+        ["student_double_day", "student_day_gap", "teacher_working_day",
          "teacher_slot_spread", "teacher_day_spread"])
     free = solve_v2(d, config=SolverConfig(weights=days_first))
     assert len({l.teacher_id for l in free.lessons}) == 1
@@ -233,7 +234,7 @@ def test_always_active_is_stronger_than_any_priority_order():
     d.student_needs = {("s1", "math"): 1, ("s1", "eng"): 1}
     demoted = ObjectiveWeights.lexicographic(
         ["teacher_working_day", "teacher_slot_spread",
-         "teacher_day_spread", "student_double_day"])
+         "teacher_day_spread", "student_day_gap", "student_double_day"])
 
     free = solve_v2(d, config=SolverConfig(weights=demoted))
     assert objective_terms(d, free.lessons)["student_double_day"] == 1

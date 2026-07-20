@@ -54,6 +54,7 @@ class ObjectiveWeights:
     """
 
     student_double_day: float = 0.0   # per (student, day) with 2 lessons
+    student_day_gap: float = 0.0      # per (student, day) non-contiguous
     teacher_slot_spread: float = 0.0  # per lesson of max-min load spread
     teacher_working_day: float = 0.0  # per (teacher, day) worked
     teacher_day_spread: float = 0.0   # per day of max-min day-count spread
@@ -73,7 +74,7 @@ class ObjectiveWeights:
         if sorted(order) != sorted(OBJECTIVE_TERMS):
             raise ValueError(
                 f"order must be a permutation of {OBJECTIVE_TERMS}")
-        magnitudes = [1_000_000.0, 10_000.0, 100.0, 1.0]
+        magnitudes = [100_000_000.0, 1_000_000.0, 10_000.0, 100.0, 1.0]
         return cls(**{name: magnitudes[i] for i, name in enumerate(order)})
 
 
@@ -288,8 +289,11 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         {(st, date) for (st, date, _p) in by_sdp}
         | {(st, date) for (st, date, _p) in pin_sdp})
     dd_vars = []
+    gd_vars = []
     w = config.weights
     caps = config.objective_caps or {}
+    soft_gap = (not config.require_consecutive
+                and (w.student_day_gap or "student_day_gap" in caps))
     for (st, date) in student_days:
         periods = sorted(set(day_periods[date]))
 
@@ -299,22 +303,33 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
 
         total = sum(occ(p) for p in periods)
         m.Add(total <= config.student_day_cap)
-        if config.require_consecutive:
-            # a student's lessons on one day must form one contiguous run
-            # of periods: for p < q non-adjacent, both occupied forces
-            # every period in between occupied (impossible if a period in
-            # between does not exist that day)
-            present = set(periods)
+        # contiguity: for p < q non-adjacent, both occupied forces every
+        # period in between occupied (impossible if a period in between
+        # does not exist that day). Hard mode forbids the violation; soft
+        # mode charges it to a gap-day indicator instead.
+        gd = m.NewBoolVar(f"gd[{st},{date}]") if soft_gap else None
+        present = set(periods)
+        if config.require_consecutive or soft_gap:
             for i, p in enumerate(periods):
                 for q in periods[i + 1:]:
                     if q - p == 1:
                         continue
                     holes = list(range(p + 1, q))
-                    if any(h not in present for h in holes):
-                        m.Add(occ(p) + occ(q) <= 1)
+                    bridged = not any(h not in present for h in holes)
+                    if config.require_consecutive:
+                        if bridged:
+                            for h in holes:
+                                m.Add(occ(p) + occ(q) <= 1 + occ(h))
+                        else:
+                            m.Add(occ(p) + occ(q) <= 1)
                     else:
-                        for h in holes:
-                            m.Add(occ(p) + occ(q) <= 1 + occ(h))
+                        if bridged:
+                            for h in holes:
+                                m.Add(occ(p) + occ(q) - occ(h) - 1 <= gd)
+                        else:
+                            m.Add(occ(p) + occ(q) - 1 <= gd)
+        if gd is not None:
+            gd_vars.append(gd)
         if w.student_double_day or "student_double_day" in caps:
             dd = m.NewBoolVar(f"dd[{st},{date}]")
             # total ≥ 2 forces dd = 1
@@ -341,6 +356,10 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         obj += [int(round(w.student_double_day)) * dd for dd in dd_vars]
     if "student_double_day" in caps:
         m.Add(sum(dd_vars) <= caps["student_double_day"])
+    if w.student_day_gap:
+        obj += [int(round(w.student_day_gap)) * gd for gd in gd_vars]
+    if "student_day_gap" in caps and not config.require_consecutive:
+        m.Add(sum(gd_vars) <= caps["student_day_gap"])
     if w.teacher_working_day:
         obj += [int(round(w.teacher_working_day)) * wd for wd in wd_vars]
     if "teacher_working_day" in caps:

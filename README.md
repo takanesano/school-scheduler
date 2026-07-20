@@ -64,9 +64,12 @@ every two-lesson day with its date, plus all four metrics — so each
 objective can be checked at a glance.
 
 The Generate panel shows all rules as **one list**. Locked cards at the
-top are the built-in hard constraints. Below them, the four soft
-objectives are draggable cards whose order is the lexicographic priority
-both solvers optimize (1 = most important). Dragging a card **above the
+top are the built-in hard constraints. Below them, the five conditions —
+one lesson per day per student, multiple-lessons-must-be-consecutive,
+and the three teacher-workload objectives — are draggable cards whose
+order is the lexicographic priority both solvers optimize
+(1 = most important). The consecutiveness condition starts at priority 0
+(always active) by default. Dragging a card **above the
 divider gives it priority 0 = always active**: it becomes a hard
 constraint with an editable bound (e.g. "lesson-count spread ≤ 1") — the
 exact optimizer enforces the bound in its model; the standard solver

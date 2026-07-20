@@ -53,11 +53,18 @@ weeks and marks non-term days `in_term: false`.
   generate accepts `objective_order` (422 on non-permutations). The UI's
   drag list (`state.objOrder`, `#prio-list`) is the source of that order.
 - Hard-constraint SETTINGS persist in the `settings` table (GET/PUT
-  /api/settings): teacher_capacity, student_day_cap,
-  require_consecutive, and `objective_caps` (an objective at "priority
-  0" — dragged above the divider in the single rules list — becomes a
-  hard "term ≤ bound" cap; the three scalar settings currently have no
-  UI, API only). EVERY validate call in main.py goes through
+  /api/settings): teacher_capacity, student_day_cap, and
+  `objective_caps` (an objective at "priority 0" — dragged above the
+  divider in the single rules list — becomes a hard "term ≤ bound" cap;
+  the scalar settings currently have no UI, API only). Consecutiveness
+  is NOT a boolean setting anymore: it is the `student_day_gap`
+  objective term, hard by default via objective_caps {student_day_gap:
+  0} in DEFAULT_SETTINGS; `require_consecutive` survives only as an
+  internal solver/validate parameter derived via `_hard_consecutive`.
+  Legacy DBs with a stored require_consecutive row are folded into
+  objective_caps once at startup (`_migrate_settings`; the legacy row is
+  the migration marker — never re-add it). EVERY validate call in
+  main.py goes through
   `_validate_with_settings`; H8 is generalized (configurable day cap;
   contiguous-run consecutiveness for any cap). Cap semantics: CP-SAT
   enforces caps as model constraints; v1 cannot — it front-loads capped

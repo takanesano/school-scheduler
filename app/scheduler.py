@@ -212,8 +212,13 @@ def validate(data: Dataset, lessons: list[Lesson],
                     f"({plist}) must be in consecutive periods",
                     *[l.id for l in ls])
 
-    # promoted objectives: aggregate metrics with hard upper bounds
+    # promoted objectives: aggregate metrics with hard upper bounds.
+    # student_day_gap capped at 0 is exactly the require_consecutive rule,
+    # which is already reported per student-day (with lesson ids) above —
+    # skip it here to avoid double reporting.
     for term, bound in sorted((objective_caps or {}).items()):
+        if term == "student_day_gap" and require_consecutive:
+            continue
         value = objective_term_values(data, known).get(term)
         if value is not None and value > bound:
             bad("objective_cap_exceeded",
@@ -504,18 +509,35 @@ def student_double_days(data: Dataset, lessons: list[Lesson]) -> int:
     return sum(1 for n in per_day.values() if n >= 2)
 
 
-# The four soft-objective terms, in the DEFAULT priority order. The user
-# can reorder them (UI drag list / `objective_order` on generate) and
-# promote them to hard caps (`objective_caps` in settings).
-OBJECTIVE_TERMS = ("student_double_day", "teacher_slot_spread",
-                   "teacher_working_day", "teacher_day_spread")
+# The soft-objective terms, in the DEFAULT priority order. The user can
+# reorder them (UI drag list / `objective_order` on generate) and promote
+# any of them to hard caps (`objective_caps` in settings). Nothing here
+# is special-cased: "student_day_gap" (multiple lessons on a day must be
+# consecutive) is hard by default only because the DEFAULT SETTINGS cap
+# it at 0 — demoting it makes it an ordinary soft preference.
+OBJECTIVE_TERMS = ("student_double_day", "student_day_gap",
+                   "teacher_slot_spread", "teacher_working_day",
+                   "teacher_day_spread")
 
 OBJECTIVE_LABELS = {
     "student_double_day": "Student days with two or more lessons",
+    "student_day_gap": "Student days with non-consecutive lessons",
     "teacher_slot_spread": "Lesson-count spread between teachers",
     "teacher_working_day": "Total teacher working days",
     "teacher_day_spread": "Working-day spread between teachers",
 }
+
+
+def student_gap_days(data: Dataset, lessons: list[Lesson]) -> int:
+    """Number of (student, day) pairs whose lessons do NOT form one
+    contiguous run of periods."""
+    per_day: dict[tuple[str, str], set[int]] = defaultdict(set)
+    for l in lessons:
+        slot = data.timeslots.get(l.timeslot_id)
+        if slot is not None:
+            per_day[(l.student_id, slot.date)].add(slot.period)
+    return sum(1 for ps in per_day.values()
+               if len(ps) >= 2 and max(ps) - min(ps) != len(ps) - 1)
 
 
 def objective_term_values(data: Dataset,
@@ -527,6 +549,7 @@ def objective_term_values(data: Dataset,
     day_counts = [len(stats[t]["days"]) for t in elig if t in stats]
     return {
         "student_double_day": student_double_days(data, lessons),
+        "student_day_gap": student_gap_days(data, lessons),
         "teacher_slot_spread":
             (max(slot_counts) - min(slot_counts)) if slot_counts else 0,
         "teacher_working_day":

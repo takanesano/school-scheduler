@@ -23,9 +23,40 @@ from .solver_v2 import ObjectiveWeights, SolverConfig, solve_v2
 from contextlib import asynccontextmanager
 
 
+def _migrate_settings(conn: sqlite3.Connection) -> None:
+    """One-time migration: consecutiveness used to be a boolean setting
+    (`require_consecutive`); it is now the `student_day_gap` objective
+    cap. Fold a legacy row's intent into objective_caps and delete it —
+    the legacy row's presence is the migration marker."""
+    row = conn.execute("SELECT value FROM settings "
+                       "WHERE key = 'require_consecutive'").fetchone()
+    if row is None:
+        return
+    caps_row = conn.execute("SELECT value FROM settings "
+                            "WHERE key = 'objective_caps'").fetchone()
+    try:
+        caps = json.loads(caps_row["value"]) if caps_row else {}
+    except (ValueError, TypeError):
+        caps = {}
+    if row["value"] == "1":
+        caps.setdefault("student_day_gap", 0)
+    with conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('objective_caps', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps(caps),))
+        conn.execute("DELETE FROM settings WHERE key = 'require_consecutive'")
+
+
 @asynccontextmanager
 async def _lifespan(app_: FastAPI):
-    db.init_db(getattr(app_.state, "db_path", db.DEFAULT_DB_PATH))
+    path = getattr(app_.state, "db_path", db.DEFAULT_DB_PATH)
+    db.init_db(path)
+    conn = db.connect(path)
+    try:
+        _migrate_settings(conn)
+    finally:
+        conn.close()
     yield
 
 
@@ -307,27 +338,26 @@ def del_student_avail(student_id: str, timeslot_id: str, conn=Depends(get_conn))
 
 # ----------------------------------------------------------------- settings
 
+# "student_day_gap" capped at 0 by default = the consecutiveness rule is
+# always active out of the box; demote the card in the UI to relax it.
 DEFAULT_SETTINGS = {"teacher_capacity": 2, "student_day_cap": 2,
-                    "require_consecutive": True, "objective_caps": {}}
+                    "objective_caps": {"student_day_gap": 0}}
 
 
 class SettingsIn(BaseModel):
     teacher_capacity: int = Field(default=2, ge=1, le=4)
     student_day_cap: int = Field(default=2, ge=1, le=4)
-    require_consecutive: bool = True
     # soft objectives promoted to hard constraints: term -> max value
     objective_caps: dict[str, int] = Field(default_factory=dict)
 
 
 def get_settings(conn: sqlite3.Connection) -> dict:
-    out = dict(DEFAULT_SETTINGS, objective_caps={})
+    out = dict(DEFAULT_SETTINGS)
     for r in conn.execute("SELECT key, value FROM settings"):
         k, v = r["key"], r["value"]
         try:
             if k in ("teacher_capacity", "student_day_cap"):
                 out[k] = int(v)
-            elif k == "require_consecutive":
-                out[k] = v == "1"
             elif k == "objective_caps":
                 caps = json.loads(v)
                 out[k] = {t: int(b) for t, b in caps.items()
@@ -335,6 +365,10 @@ def get_settings(conn: sqlite3.Connection) -> dict:
         except (ValueError, TypeError):
             pass                    # corrupt row: keep the default
     return out
+
+
+def _hard_consecutive(settings: dict) -> bool:
+    return settings["objective_caps"].get("student_day_gap") == 0
 
 
 @app.get("/api/settings")
@@ -353,7 +387,6 @@ def write_settings(body: SettingsIn,
         raise HTTPException(422, "objective cap bounds must be 0-999")
     rows = [("teacher_capacity", str(body.teacher_capacity)),
             ("student_day_cap", str(body.student_day_cap)),
-            ("require_consecutive", "1" if body.require_consecutive else "0"),
             ("objective_caps", json.dumps(body.objective_caps))]
     with conn:
         conn.executemany(
@@ -365,7 +398,7 @@ def write_settings(body: SettingsIn,
 def _validate_with_settings(conn, data, lessons):
     s = get_settings(conn)
     return validate(data, lessons, s["teacher_capacity"],
-                    s["student_day_cap"], s["require_consecutive"],
+                    s["student_day_cap"], _hard_consecutive(s),
                     s["objective_caps"])
 
 
@@ -480,7 +513,7 @@ def generate_schedule(opts: GenerateOptions,
         cfg = SolverConfig(
             teacher_capacity=s["teacher_capacity"],
             student_day_cap=s["student_day_cap"],
-            require_consecutive=s["require_consecutive"],
+            require_consecutive=_hard_consecutive(s),
             objective_caps=s["objective_caps"] or None,
             weights=ObjectiveWeights.lexicographic(order),
             deterministic_time=opts.v2_time_budget,
@@ -490,7 +523,7 @@ def generate_schedule(opts: GenerateOptions,
         result = solve(data, fixed_lessons=fixed,
                        teacher_capacity=s["teacher_capacity"],
                        student_day_cap=s["student_day_cap"],
-                       require_consecutive=s["require_consecutive"])
+                       require_consecutive=_hard_consecutive(s))
         if opts.compress_teacher_days:
             # user-placed lessons carry a DB id and stay pinned; only
             # solver-generated ones (id None) may be rearranged.
@@ -505,7 +538,7 @@ def generate_schedule(opts: GenerateOptions,
                 data, generated, fixed=pinned,
                 teacher_capacity=s["teacher_capacity"],
                 student_day_cap=s["student_day_cap"],
-                require_consecutive=s["require_consecutive"],
+                require_consecutive=_hard_consecutive(s),
                 objective_order=capped + rest)
     with conn:
         conn.execute("DELETE FROM lessons")
@@ -531,7 +564,7 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     lessons = load_lessons(conn)
     stats = teacher_day_stats(data, lessons)
     sstats = student_day_stats(data, lessons)
-    (double_days, slot_spread, total_days,
+    (double_days, gap_days, slot_spread, total_days,
      day_spread) = schedule_objective(data, lessons)
     return {
         "lessons": [l.__dict__ for l in lessons],
@@ -547,6 +580,7 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
             {"student_id": st, "name": data.students[st], **sstats[st]}
             for st in sorted(data.students, key=lambda st: data.students[st])],
         "objective": {"student_double_days": double_days,
+                      "student_day_gaps": gap_days,
                       "slot_spread": slot_spread, "total_days": total_days,
                       "day_spread": day_spread},
     }
