@@ -83,7 +83,9 @@ class SolverConfig:
 
     teacher_capacity: int = 2         # H5: simultaneous students/teacher
     student_day_cap: int = 2          # H8: max lessons per student-day
-    require_consecutive: bool = True  # H8: two-a-day must be adjacent
+    require_consecutive: bool = True  # H8: a student's day is contiguous
+    # soft objectives promoted to hard constraints: term name -> max value
+    objective_caps: dict[str, int] | None = None
     weights: ObjectiveWeights = field(
         default_factory=ObjectiveWeights.lexicographic)
     # CP-SAT budget. deterministic_time is the primary cutoff: it is
@@ -121,7 +123,9 @@ def weighted_cost(data: Dataset, lessons: list[Lesson],
 def _v1_pipeline(data: Dataset, config: SolverConfig,
                  fixed_lessons: list[Lesson] | None) -> SolveResult:
     result = solve(data, fixed_lessons=fixed_lessons,
-                   teacher_capacity=config.teacher_capacity)
+                   teacher_capacity=config.teacher_capacity,
+                   student_day_cap=config.student_day_cap,
+                   require_consecutive=config.require_consecutive)
     if result.complete:
         pinned = list(fixed_lessons or [])
         movable = [l for l in result.lessons if l not in pinned]
@@ -132,6 +136,8 @@ def _v1_pipeline(data: Dataset, config: SolverConfig,
         result.lessons = optimize_teacher_days(
             data, movable, fixed=pinned,
             teacher_capacity=config.teacher_capacity,
+            student_day_cap=config.student_day_cap,
+            require_consecutive=config.require_consecutive,
             objective_order=order)
     return result
 
@@ -157,11 +163,20 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
     cp = _solve_cpsat(data, config, pinned, reference, hint)
     if cp is None:
         return v1
-    if (validate(data, cp.lessons, config.teacher_capacity)
-            or coverage_report(data, cp.lessons)):
+
+    def fully_valid(lessons):
+        return not (validate(data, lessons, config.teacher_capacity,
+                             config.student_day_cap,
+                             config.require_consecutive,
+                             config.objective_caps)
+                    or coverage_report(data, lessons))
+    if not fully_valid(cp.lessons):
         return v1                      # backend misbehaved: v1 wins
-    if v1.complete and (weighted_cost(data, cp.lessons, config, reference)
-                        > weighted_cost(data, v1.lessons, config, reference)):
+    # prefer v1 on cost only when v1 itself satisfies everything —
+    # including promoted objective caps, which v1 cannot enforce
+    if (v1.complete and fully_valid(v1.lessons)
+            and (weighted_cost(data, cp.lessons, config, reference)
+                 > weighted_cost(data, v1.lessons, config, reference))):
         return v1                      # time budget produced nothing better
     return cp
 
@@ -274,21 +289,33 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         | {(st, date) for (st, date, _p) in pin_sdp})
     dd_vars = []
     w = config.weights
+    caps = config.objective_caps or {}
     for (st, date) in student_days:
         periods = sorted(set(day_periods[date]))
-        total = (sum(v for p in periods for v in by_sdp.get((st, date, p), []))
-                 + sum(pin_sdp.get((st, date, p), 0) for p in periods))
+
+        def occ(p, st=st, date=date):   # occupancy of one period (expr)
+            return (sum(by_sdp.get((st, date, p), []))
+                    + pin_sdp.get((st, date, p), 0))
+
+        total = sum(occ(p) for p in periods)
         m.Add(total <= config.student_day_cap)
-        if config.require_consecutive and config.student_day_cap == 2:
+        if config.require_consecutive:
+            # a student's lessons on one day must form one contiguous run
+            # of periods: for p < q non-adjacent, both occupied forces
+            # every period in between occupied (impossible if a period in
+            # between does not exist that day)
+            present = set(periods)
             for i, p in enumerate(periods):
                 for q in periods[i + 1:]:
                     if q - p == 1:
-                        continue       # adjacent pair: allowed
-                    m.Add(sum(by_sdp.get((st, date, p), []))
-                          + sum(by_sdp.get((st, date, q), []))
-                          + pin_sdp.get((st, date, p), 0)
-                          + pin_sdp.get((st, date, q), 0) <= 1)
-        if w.student_double_day:
+                        continue
+                    holes = list(range(p + 1, q))
+                    if any(h not in present for h in holes):
+                        m.Add(occ(p) + occ(q) <= 1)
+                    else:
+                        for h in holes:
+                            m.Add(occ(p) + occ(q) <= 1 + occ(h))
+        if w.student_double_day or "student_double_day" in caps:
             dd = m.NewBoolVar(f"dd[{st},{date}]")
             # total ≥ 2 forces dd = 1
             m.Add(total <= 1 + (config.student_day_cap - 1) * dd)
@@ -307,24 +334,31 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         wd_vars.append(wd)
         day_count_of[t].append(wd)
 
-    # ---- objective
+    # ---- objective terms and promoted hard caps
     total_sessions = sum(remaining.values()) + len(pinned)
     obj = []
     if w.student_double_day:
         obj += [int(round(w.student_double_day)) * dd for dd in dd_vars]
+    if "student_double_day" in caps:
+        m.Add(sum(dd_vars) <= caps["student_double_day"])
     if w.teacher_working_day:
         obj += [int(round(w.teacher_working_day)) * wd for wd in wd_vars]
+    if "teacher_working_day" in caps:
+        m.Add(sum(wd_vars) <= caps["teacher_working_day"])
     elig = eligible_teachers(data)
     pin_teacher_total = Counter(l.teacher_id for l in pinned)
-    if w.teacher_slot_spread and elig:
+    if (w.teacher_slot_spread or "teacher_slot_spread" in caps) and elig:
         lmax = m.NewIntVar(0, total_sessions, "load_max")
         lmin = m.NewIntVar(0, total_sessions, "load_min")
         for t in elig:
             load = sum(by_teacher[t]) + pin_teacher_total.get(t, 0)
             m.Add(lmax >= load)
             m.Add(lmin <= load)
-        obj.append(int(round(w.teacher_slot_spread)) * (lmax - lmin))
-    if w.teacher_day_spread and elig:
+        if w.teacher_slot_spread:
+            obj.append(int(round(w.teacher_slot_spread)) * (lmax - lmin))
+        if "teacher_slot_spread" in caps:
+            m.Add(lmax - lmin <= caps["teacher_slot_spread"])
+    if (w.teacher_day_spread or "teacher_day_spread" in caps) and elig:
         n_days = len(day_periods)
         dmax = m.NewIntVar(0, n_days, "days_max")
         dmin = m.NewIntVar(0, n_days, "days_min")
@@ -332,7 +366,10 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             count = sum(day_count_of.get(t, []))
             m.Add(dmax >= count)
             m.Add(dmin <= count)
-        obj.append(int(round(w.teacher_day_spread)) * (dmax - dmin))
+        if w.teacher_day_spread:
+            obj.append(int(round(w.teacher_day_spread)) * (dmax - dmin))
+        if "teacher_day_spread" in caps:
+            m.Add(dmax - dmin <= caps["teacher_day_spread"])
     if w.changed_lesson and reference:
         seen = set()
         for l in reference:

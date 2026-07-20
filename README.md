@@ -63,10 +63,18 @@ per-teacher lessons / working-days table and a per-student table flagging
 every two-lesson day with its date, plus all four metrics — so each
 objective can be checked at a glance.
 
-In the Generate panel, the hard constraints are listed in a locked
-"Always satisfied" box, and the four soft objectives below it are a
-**drag-to-reorder priority list** — the order is the lexicographic
-priority both solvers optimize (top outranks everything beneath it).
+In the Generate panel, the "Always satisfied" box holds the hard rules:
+the structural ones are fixed, while **teacher capacity per timeslot,
+the per-day student lesson cap, and the consecutiveness rule are
+editable** (stored settings — validation, manual edits, and the live
+editor feedback all follow them immediately). The four soft objectives
+below are a **drag-to-reorder priority list** — the order is the
+lexicographic priority both solvers optimize. Dragging a priority card
+INTO the "Always satisfied" box **promotes it to a hard constraint**
+with an editable bound (e.g. "lesson-count spread between teachers ≤ 1"):
+the exact optimizer enforces the bound in its model, the standard solver
+works toward it first and the Status panel reports it as a violation if
+it cannot be met. Drag the card back down to relax it again.
 
 An optional **exact optimizer** (the "exact optimizer (CP-SAT)" checkbox
 in the Generate panel's Solver group) models the whole problem as a

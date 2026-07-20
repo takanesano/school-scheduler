@@ -146,6 +146,16 @@ button.small {
              align-items: center; justify-content: center;
              font-size: 0.72rem; font-weight: 700; flex: none; }
 .prio-grip { margin-left: auto; color: var(--muted); }
+.hard-ctrl { font-size: 0.82rem; margin: 0.35rem 0; }
+.hard-ctrl input[type="number"] { width: 3.4rem; padding: 0.12rem 0.3rem; }
+#hard-objs { list-style: none; margin: 0.35rem 0 0; padding: 0; }
+.prio-item.hard-obj { border-left: 3px solid var(--danger);
+                      background: var(--bg); font-size: 0.82rem; }
+.hard-bound { margin-left: auto; font-size: 0.8rem; }
+.hard-bound input { width: 3.4rem; padding: 0.1rem 0.3rem; }
+.prio-item.hard-obj .prio-grip { margin-left: 0.4rem; }
+.hard-box.drag-over { outline: 2px dashed var(--accent);
+                      outline-offset: -2px; }
 #exact-opts { margin: 0.2rem 0 0 1.4rem; }
 .workload { margin-top: 0.7rem; }
 .workload-tables { display: flex; gap: 1.2rem; flex-wrap: wrap;

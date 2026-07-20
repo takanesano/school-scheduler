@@ -96,8 +96,18 @@ def _slot_sort_key(ts: Timeslot) -> tuple:
 
 
 def validate(data: Dataset, lessons: list[Lesson],
-             teacher_capacity: int = 2) -> list[Violation]:
-    """Return every hard-constraint violation in the given schedule."""
+             teacher_capacity: int = 2,
+             student_day_cap: int = 2,
+             require_consecutive: bool = True,
+             objective_caps: dict[str, int] | None = None
+             ) -> list[Violation]:
+    """Return every hard-constraint violation in the given schedule.
+
+    ``teacher_capacity`` / ``student_day_cap`` / ``require_consecutive``
+    parameterize H5 and H8. ``objective_caps`` maps OBJECTIVE_TERMS names
+    to upper bounds — soft objectives the user promoted to hard
+    constraints; exceeding a bound is reported as a schedule-level
+    violation (no specific lesson ids)."""
     out: list[Violation] = []
 
     def bad(code: str, msg: str, *ids: int | None) -> None:
@@ -179,24 +189,36 @@ def validate(data: Dataset, lessons: list[Lesson],
                 f"{slot.date} P{slot.period} (capacity {cap})",
                 *[l.id for l in ls])
 
-    # H8: at most two lessons per student per day, consecutive when two
+    # H8: per-student daily cap; multiple lessons must sit in one
+    # contiguous run of periods when require_consecutive is on
     by_student_day: dict[tuple[str, str], list[Lesson]] = defaultdict(list)
     for l in known:
         date = data.timeslots[l.timeslot_id].date
         by_student_day[(l.student_id, date)].append(l)
     for (st, date), ls in sorted(by_student_day.items()):
-        if len(ls) > 2:
+        if len(ls) > student_day_cap:
             bad("student_day_overload",
                 f"Student {data.students[st]} has {len(ls)} lessons on "
-                f"{date} (max 2 per day)", *[l.id for l in ls])
-        elif len(ls) == 2:
-            p1, p2 = sorted(data.timeslots[l.timeslot_id].period for l in ls)
-            # p1 == p2 means the same timeslot — H6 already reports that
-            if p1 != p2 and p2 - p1 != 1:
+                f"{date} (max {student_day_cap} per day)",
+                *[l.id for l in ls])
+        elif require_consecutive and len(ls) >= 2:
+            periods = sorted(data.timeslots[l.timeslot_id].period for l in ls)
+            # duplicates mean a same-slot clash — H6 already reports that
+            if (len(set(periods)) == len(periods)
+                    and periods[-1] - periods[0] != len(periods) - 1):
+                plist = ", ".join(f"P{p}" for p in periods)
                 bad("student_day_gap",
-                    f"Student {data.students[st]}'s two lessons on {date} "
-                    f"are P{p1} and P{p2} — they must be consecutive "
-                    f"periods", *[l.id for l in ls])
+                    f"Student {data.students[st]}'s lessons on {date} "
+                    f"({plist}) must be in consecutive periods",
+                    *[l.id for l in ls])
+
+    # promoted objectives: aggregate metrics with hard upper bounds
+    for term, bound in sorted((objective_caps or {}).items()):
+        value = objective_term_values(data, known).get(term)
+        if value is not None and value > bound:
+            bad("objective_cap_exceeded",
+                f"{OBJECTIVE_LABELS.get(term, term)} is {value} but must "
+                f"be at most {bound}")
 
     return out
 
@@ -237,9 +259,12 @@ class SolveResult:
 class _State:
     """Mutable occupancy tracking during search."""
 
-    def __init__(self, data: Dataset, teacher_capacity: int = 2):
+    def __init__(self, data: Dataset, teacher_capacity: int = 2,
+                 student_day_cap: int = 2, require_consecutive: bool = True):
         self.data = data
         self.teacher_capacity = teacher_capacity
+        self.student_day_cap = student_day_cap
+        self.require_consecutive = require_consecutive
         self.teacher_load: Counter = Counter()
         self.teacher_total: Counter = Counter()   # lessons per teacher
         self.student_busy: set[tuple[str, str]] = set()
@@ -256,12 +281,12 @@ class _State:
             return False
         slot = self.data.timeslots[s]
         periods = self.student_day[(st, slot.date)]
-        if len(periods) >= 2:
-            return False                       # H8: max two lessons a day
-        if len(periods) == 1:
-            (p,) = periods
-            if abs(p - slot.period) != 1:
-                return False                   # H8: the two must be adjacent
+        if len(periods) >= self.student_day_cap:
+            return False                       # H8: daily cap reached
+        if self.require_consecutive and periods:
+            combined = periods | {slot.period}
+            if max(combined) - min(combined) != len(combined) - 1:
+                return False                   # H8: must stay contiguous
         return True
 
     def place(self, l: Lesson) -> None:
@@ -310,6 +335,7 @@ def check_input_problems(data: Dataset) -> list[str]:
 
 def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
           teacher_capacity: int = 2,
+          student_day_cap: int = 2, require_consecutive: bool = True,
           max_nodes: int = 500_000) -> SolveResult:
     """Backtracking search with MRV (most-constrained-first) ordering.
 
@@ -320,7 +346,8 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
     the instance allows it (two consecutive ones only when necessary).
     """
     fixed = list(fixed_lessons or [])
-    state = _State(data, teacher_capacity)
+    state = _State(data, teacher_capacity, student_day_cap,
+                   require_consecutive)
     for l in fixed:
         state.place(l)
 
@@ -478,9 +505,17 @@ def student_double_days(data: Dataset, lessons: list[Lesson]) -> int:
 
 
 # The four soft-objective terms, in the DEFAULT priority order. The user
-# can reorder them (UI drag list / `objective_order` on generate).
+# can reorder them (UI drag list / `objective_order` on generate) and
+# promote them to hard caps (`objective_caps` in settings).
 OBJECTIVE_TERMS = ("student_double_day", "teacher_slot_spread",
                    "teacher_working_day", "teacher_day_spread")
+
+OBJECTIVE_LABELS = {
+    "student_double_day": "Student days with two or more lessons",
+    "teacher_slot_spread": "Lesson-count spread between teachers",
+    "teacher_working_day": "Total teacher working days",
+    "teacher_day_spread": "Working-day spread between teachers",
+}
 
 
 def objective_term_values(data: Dataset,
@@ -518,6 +553,8 @@ def schedule_objective(data: Dataset, lessons: list[Lesson],
 def optimize_teacher_days(data: Dataset, movable: list[Lesson],
                           fixed: list[Lesson] | None = None,
                           teacher_capacity: int = 2,
+                          student_day_cap: int = 2,
+                          require_consecutive: bool = True,
                           objective_order: list[str] | None = None,
                           max_rounds: int = 200) -> list[Lesson]:
     """Deterministic local search improving ``schedule_objective``.
@@ -544,7 +581,11 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
     work = list(movable)
 
     def ok(candidate: list[Lesson]) -> bool:
-        return not validate(data, fixed + candidate, teacher_capacity)
+        # objective caps are deliberately NOT checked here: the hill climb
+        # works TOWARD them (put promoted terms first in objective_order);
+        # validate reports any still-unmet cap on the final schedule
+        return not validate(data, fixed + candidate, teacher_capacity,
+                            student_day_cap, require_consecutive)
 
     def obj(candidate: list[Lesson]) -> tuple[int, ...]:
         return schedule_objective(data, fixed + candidate, objective_order)

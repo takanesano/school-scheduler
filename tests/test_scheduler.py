@@ -166,6 +166,75 @@ def test_student_three_lessons_per_day_rejected():
     assert "max 2 per day" in vs[0].message
 
 
+def test_student_day_cap_configurable():
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+               Lesson("s1", "eng", "t1", "r1", "mon-2", id=2)]
+    assert validate(d, lessons) == []                       # cap 2 default
+    vs = validate(d, lessons, student_day_cap=1)
+    assert codes(vs) == ["student_day_overload"]
+    assert "max 1 per day" in vs[0].message
+
+
+def test_consecutiveness_can_be_disabled():
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+               Lesson("s1", "eng", "t1", "r1", "mon-3", id=2)]
+    assert codes(validate(d, lessons)) == ["student_day_gap"]
+    assert validate(d, lessons, require_consecutive=False) == []
+
+
+def test_three_lessons_contiguity_with_higher_cap():
+    def world(n_periods):
+        d = make_data(n_slots_per_day=n_periods, days=("Mon",))
+        d.subjects["sci"] = "Science"
+        d.teacher_subjects |= {("t1", "sci"), ("t2", "sci")}
+        d.rooms["r1"] = Room("r1", "Room 1", 3)
+        return d
+
+    triple = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+              Lesson("s1", "eng", "t1", "r1", "mon-2", id=2),
+              Lesson("s1", "sci", "t2", "r1", "mon-3", id=3)]
+    assert validate(world(3), triple, student_day_cap=3) == []   # P1-P2-P3
+
+    gapped = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+              Lesson("s1", "eng", "t1", "r1", "mon-2", id=2),
+              Lesson("s1", "sci", "t2", "r1", "mon-4", id=3)]    # P4: gap
+    vs = validate(world(4), gapped, student_day_cap=3)
+    assert codes(vs) == ["student_day_gap"]
+    assert "P1, P2, P4" in vs[0].message
+
+
+def test_objective_caps_reported_as_violations():
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+               Lesson("s2", "eng", "t1", "r1", "tue-1", id=2)]
+    # t1 has 2 lessons, t2 none -> slot spread 2
+    assert validate(d, lessons) == []
+    vs = validate(d, lessons,
+                  objective_caps={"teacher_slot_spread": 1})
+    assert codes(vs) == ["objective_cap_exceeded"]
+    assert "is 2 but must be at most 1" in vs[0].message
+    assert vs[0].lesson_ids == ()
+    assert validate(d, lessons,
+                    objective_caps={"teacher_slot_spread": 2}) == []
+
+
+def test_solve_with_day_cap_three_stays_contiguous():
+    d = make_data(n_slots_per_day=4, days=("Mon",))
+    d.subjects["sci"] = "Science"
+    d.teacher_subjects |= {("t1", "sci"), ("t2", "sci")}
+    d.rooms["r1"] = Room("r1", "Room 1", 2)
+    d.student_needs = {("s1", "math"): 1, ("s1", "eng"): 1,
+                       ("s1", "sci"): 1}
+    assert not solve(d).complete                     # default cap 2
+    r = solve(d, student_day_cap=3)
+    assert r.complete
+    assert validate(d, r.lessons, student_day_cap=3) == []
+    periods = sorted(d.timeslots[l.timeslot_id].period for l in r.lessons)
+    assert periods[-1] - periods[0] == 2             # contiguous triple
+
+
 def test_same_subject_twice_in_a_day_now_allowed_if_consecutive():
     d = make_data()
     lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),

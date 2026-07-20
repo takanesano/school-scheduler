@@ -51,8 +51,19 @@ weeks and marks non-term days `in_term: false`.
   four terms; `schedule_objective(data, lessons, order)` and
   `ObjectiveWeights.lexicographic(order)` both take a permutation, and
   generate accepts `objective_order` (422 on non-permutations). The UI's
-  drag list (`state.objOrder`, `#prio-list`) is the source of that
-  order; the "Always satisfied" box above it is display-only.
+  drag list (`state.objOrder`, `#prio-list`) is the source of that order.
+- Hard-constraint SETTINGS persist in the `settings` table (GET/PUT
+  /api/settings): teacher_capacity, student_day_cap,
+  require_consecutive, and `objective_caps` (soft objectives promoted to
+  hard "term ≤ bound" caps by dragging a priority card into the hard
+  box). EVERY validate call in main.py goes through
+  `_validate_with_settings`; H8 is generalized (configurable day cap;
+  contiguous-run consecutiveness for any cap). Cap semantics: CP-SAT
+  enforces caps as model constraints; v1 cannot — it front-loads capped
+  terms in its hill-climb order and `validate` reports
+  `objective_cap_exceeded` (no lesson ids, so manual adds are not
+  blocked by caps). solve_v2's cost gate only prefers v1 when v1 itself
+  satisfies the caps.
 - `optimize_teacher_days` is a post-solve local search (day-block handover
   and single-lesson moves) improving `schedule_objective` =
   (lesson-count spread, total teacher working days, day-count spread) over

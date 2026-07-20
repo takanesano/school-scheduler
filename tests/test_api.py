@@ -386,6 +386,90 @@ def test_generate_honors_objective_order(client):
     assert len(teachers) == 1
 
 
+# ------------------------------------------------------------------ settings
+
+def test_settings_defaults_and_roundtrip(client):
+    assert client.get("/api/settings").json() == {
+        "teacher_capacity": 2, "student_day_cap": 2,
+        "require_consecutive": True, "objective_caps": {}}
+    r = client.put("/api/settings", json={
+        "teacher_capacity": 1, "student_day_cap": 3,
+        "require_consecutive": False,
+        "objective_caps": {"teacher_slot_spread": 1}})
+    assert r.status_code == 200
+    assert client.get("/api/settings").json() == {
+        "teacher_capacity": 1, "student_day_cap": 3,
+        "require_consecutive": False,
+        "objective_caps": {"teacher_slot_spread": 1}}
+
+
+@pytest.mark.parametrize("body", [
+    {"teacher_capacity": 0},
+    {"student_day_cap": 9},
+    {"objective_caps": {"nonsense": 1}},
+    {"objective_caps": {"teacher_slot_spread": -1}},
+])
+def test_settings_validation(client, body):
+    assert client.put("/api/settings", json=body).status_code == 422
+
+
+def test_settings_drive_validation_and_manual_adds(client):
+    seed_world(client)
+    client.put("/api/settings", json={"student_day_cap": 1})
+    base = {"student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1"}
+    assert client.post("/api/lessons",
+                       json=dict(base, timeslot_id="mon-1")).status_code == 200
+    r = client.post("/api/lessons", json=dict(base, timeslot_id="mon-2"))
+    assert r.status_code == 409
+    codes = {v["code"] for v in r.json()["detail"]["violations"]}
+    assert "student_day_overload" in codes
+    # relax back to 2 -> same add is now clean
+    client.put("/api/settings", json={"student_day_cap": 2})
+    assert client.post("/api/lessons",
+                       json=dict(base, timeslot_id="mon-2")).status_code == 200
+    assert client.get("/api/schedule").json()["violations"] == []
+
+
+def test_settings_consecutive_off_allows_gap(client):
+    seed_world(client)
+    client.post("/api/timeslots", json={"id": "mon-3", "date": "2026-07-27",
+                                        "period": 3})
+    client.post("/api/teacher_availability",
+                json={"teacher_id": "t1", "timeslot_id": "mon-3"})
+    client.post("/api/student_availability",
+                json={"student_id": "s1", "timeslot_id": "mon-3"})
+    client.put("/api/settings", json={"require_consecutive": False})
+    base = {"student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1"}
+    assert client.post("/api/lessons",
+                       json=dict(base, timeslot_id="mon-1")).status_code == 200
+    assert client.post("/api/lessons",
+                       json=dict(base, timeslot_id="mon-3")).status_code == 200
+    assert client.get("/api/schedule").json()["violations"] == []
+
+
+def test_promoted_objective_cap_reported_in_status(client):
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    client.post("/api/teacher_availability",
+                json={"teacher_id": "t2", "timeslot_id": "tue-1"})
+    # both lessons on t1 -> slot spread 2
+    for slot in ("mon-1", "tue-1"):
+        client.post("/api/lessons", json={
+            "student_id": "s1" if slot == "mon-1" else "s2",
+            "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1", "timeslot_id": slot})
+    assert client.get("/api/schedule").json()["violations"] == []
+    client.put("/api/settings",
+               json={"objective_caps": {"teacher_slot_spread": 1}})
+    codes = {v["code"] for v in
+             client.get("/api/schedule").json()["violations"]}
+    assert codes == {"objective_cap_exceeded"}
+
+
 def test_generate_v2_accepts_small_budget(client):
     pytest.importorskip("ortools")
     seed_world(client)

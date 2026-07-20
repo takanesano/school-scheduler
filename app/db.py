@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS student_availability (
     PRIMARY KEY (student_id, timeslot_id)
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS lessons (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id  TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,

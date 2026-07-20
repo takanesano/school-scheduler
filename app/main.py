@@ -4,6 +4,7 @@ Run locally with:  .venv/bin/uvicorn app.main:app --reload
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -304,6 +305,70 @@ def del_student_avail(student_id: str, timeslot_id: str, conn=Depends(get_conn))
     return {"ok": True}
 
 
+# ----------------------------------------------------------------- settings
+
+DEFAULT_SETTINGS = {"teacher_capacity": 2, "student_day_cap": 2,
+                    "require_consecutive": True, "objective_caps": {}}
+
+
+class SettingsIn(BaseModel):
+    teacher_capacity: int = Field(default=2, ge=1, le=4)
+    student_day_cap: int = Field(default=2, ge=1, le=4)
+    require_consecutive: bool = True
+    # soft objectives promoted to hard constraints: term -> max value
+    objective_caps: dict[str, int] = Field(default_factory=dict)
+
+
+def get_settings(conn: sqlite3.Connection) -> dict:
+    out = dict(DEFAULT_SETTINGS, objective_caps={})
+    for r in conn.execute("SELECT key, value FROM settings"):
+        k, v = r["key"], r["value"]
+        try:
+            if k in ("teacher_capacity", "student_day_cap"):
+                out[k] = int(v)
+            elif k == "require_consecutive":
+                out[k] = v == "1"
+            elif k == "objective_caps":
+                caps = json.loads(v)
+                out[k] = {t: int(b) for t, b in caps.items()
+                          if t in OBJECTIVE_TERMS}
+        except (ValueError, TypeError):
+            pass                    # corrupt row: keep the default
+    return out
+
+
+@app.get("/api/settings")
+def read_settings(conn: sqlite3.Connection = Depends(get_conn)):
+    return get_settings(conn)
+
+
+@app.put("/api/settings")
+def write_settings(body: SettingsIn,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+    bad_terms = [t for t in body.objective_caps if t not in OBJECTIVE_TERMS]
+    if bad_terms:
+        raise HTTPException(
+            422, f"Unknown objective term(s): {', '.join(bad_terms)}")
+    if any(b < 0 or b > 999 for b in body.objective_caps.values()):
+        raise HTTPException(422, "objective cap bounds must be 0-999")
+    rows = [("teacher_capacity", str(body.teacher_capacity)),
+            ("student_day_cap", str(body.student_day_cap)),
+            ("require_consecutive", "1" if body.require_consecutive else "0"),
+            ("objective_caps", json.dumps(body.objective_caps))]
+    with conn:
+        conn.executemany(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", rows)
+    return get_settings(conn)
+
+
+def _validate_with_settings(conn, data, lessons):
+    s = get_settings(conn)
+    return validate(data, lessons, s["teacher_capacity"],
+                    s["student_day_cap"], s["require_consecutive"],
+                    s["objective_caps"])
+
+
 # ------------------------------------------------------------ CSV import/export
 
 @app.post("/api/import/{entity}")
@@ -408,24 +473,40 @@ def generate_schedule(opts: GenerateOptions,
     data = load_dataset(conn)
     problems = check_input_problems(data)
     fixed = load_lessons(conn) if opts.keep_existing else []
+    s = get_settings(conn)
     if opts.solver == "v2":
         # exact CP-SAT optimization; validates its own output and falls
         # back to the v1 pipeline internally when it cannot do better
         cfg = SolverConfig(
+            teacher_capacity=s["teacher_capacity"],
+            student_day_cap=s["student_day_cap"],
+            require_consecutive=s["require_consecutive"],
+            objective_caps=s["objective_caps"] or None,
             weights=ObjectiveWeights.lexicographic(order),
             deterministic_time=opts.v2_time_budget,
             time_limit_seconds=opts.v2_time_budget * 3 + 10)  # wall safety
         result = solve_v2(data, config=cfg, fixed_lessons=fixed)
     else:
-        result = solve(data, fixed_lessons=fixed)
+        result = solve(data, fixed_lessons=fixed,
+                       teacher_capacity=s["teacher_capacity"],
+                       student_day_cap=s["student_day_cap"],
+                       require_consecutive=s["require_consecutive"])
         if opts.compress_teacher_days:
             # user-placed lessons carry a DB id and stay pinned; only
-            # solver-generated ones (id None) may be rearranged
+            # solver-generated ones (id None) may be rearranged.
+            # promoted (capped) objectives lead the hill-climb order.
+            capped = [t for t in (order or list(OBJECTIVE_TERMS))
+                      if t in s["objective_caps"]]
+            rest = [t for t in (order or list(OBJECTIVE_TERMS))
+                    if t not in s["objective_caps"]]
             pinned = [l for l in result.lessons if l.id is not None]
             generated = [l for l in result.lessons if l.id is None]
-            result.lessons = optimize_teacher_days(data, generated,
-                                                   fixed=pinned,
-                                                   objective_order=order)
+            result.lessons = optimize_teacher_days(
+                data, generated, fixed=pinned,
+                teacher_capacity=s["teacher_capacity"],
+                student_day_cap=s["student_day_cap"],
+                require_consecutive=s["require_consecutive"],
+                objective_order=capped + rest)
     with conn:
         conn.execute("DELETE FROM lessons")
         conn.executemany(
@@ -454,7 +535,8 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
      day_spread) = schedule_objective(data, lessons)
     return {
         "lessons": [l.__dict__ for l in lessons],
-        "violations": _violations_json(validate(data, lessons)),
+        "violations": _violations_json(
+            _validate_with_settings(conn, data, lessons)),
         "coverage": _violations_json(coverage_report(data, lessons)),
         "teacher_stats": [
             {"teacher_id": t, "name": data.teachers[t],
@@ -477,7 +559,7 @@ def add_lesson(item: LessonIn, conn: sqlite3.Connection = Depends(get_conn)):
                        item.room_id, item.timeslot_id)
     lessons = load_lessons(conn) + [candidate]
     new_violations = [
-        v for v in validate(data, lessons)
+        v for v in _validate_with_settings(conn, data, lessons)
         if None in v.lesson_ids]  # violations involving the new lesson
     if new_violations and not item.force:
         raise HTTPException(409, detail={"violations": _violations_json(new_violations)})
@@ -530,7 +612,8 @@ def update_lesson(lesson_id: int, patch: LessonPatch,
         fields.get("timeslot_id", target.timeslot_id),
         id=lesson_id)
     new_schedule = [l for l in lessons if l.id != lesson_id] + [updated]
-    new_violations = [v for v in validate(data, new_schedule)
+    new_violations = [v for v in _validate_with_settings(conn, data,
+                                                        new_schedule)
                       if lesson_id in v.lesson_ids]
     if new_violations and not patch.force:
         raise HTTPException(409, detail={"violations": _violations_json(new_violations)})
@@ -576,7 +659,8 @@ def check_lesson_options(lesson_id: int, opts: OptionsIn,
     def problems(su: str, t: str, r: str) -> list[str]:
         cand = Lesson(target.student_id, su, t, r,
                       target.timeslot_id, id=lesson_id)
-        return [v.message for v in validate(data, others + [cand])
+        return [v.message
+                for v in _validate_with_settings(conn, data, others + [cand])
                 if lesson_id in v.lesson_ids]
 
     return {

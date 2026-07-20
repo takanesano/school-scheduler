@@ -200,6 +200,41 @@ def test_weights_change_the_answer():
     assert objective_terms(d, packed.lessons)["teacher_working_day"] == 1
 
 
+def test_cpsat_enforces_promoted_objective_cap():
+    """Days-first weights alone would give everything to one teacher
+    (spread 2); promoting the balance objective to a hard cap of 0 forces
+    an even split regardless of the weights."""
+    d = make_data()
+    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    days_first = ObjectiveWeights.lexicographic(
+        ["student_double_day", "teacher_working_day",
+         "teacher_slot_spread", "teacher_day_spread"])
+    free = solve_v2(d, config=SolverConfig(weights=days_first))
+    assert len({l.teacher_id for l in free.lessons}) == 1
+
+    capped = SolverConfig(weights=days_first,
+                          objective_caps={"teacher_slot_spread": 0})
+    r = solve_v2(d, config=capped)
+    assert r.backend == "cpsat"
+    assert len({l.teacher_id for l in r.lessons}) == 2
+    assert objective_terms(d, r.lessons)["teacher_slot_spread"] == 0
+
+
+def test_cpsat_higher_day_cap_contiguous_triple():
+    d = make_data(n_slots_per_day=4, days=("Mon",))
+    d.subjects["sci"] = "Science"
+    d.teacher_subjects |= {("t1", "sci"), ("t2", "sci")}
+    d.rooms["r1"] = Room("r1", "Room 1", 2)
+    d.student_needs = {("s1", "math"): 1, ("s1", "eng"): 1,
+                       ("s1", "sci"): 1}
+    cfg = SolverConfig(student_day_cap=3)
+    r = solve_v2(d, config=cfg)
+    assert r.complete
+    assert validate(d, r.lessons, student_day_cap=3) == []
+    periods = sorted(d.timeslots[l.timeslot_id].period for l in r.lessons)
+    assert periods[-1] - periods[0] == 2
+
+
 # ------------------------------------------- minimal-disruption rescheduling
 
 def test_resolve_keeps_schedule_when_still_valid(tmp_path):

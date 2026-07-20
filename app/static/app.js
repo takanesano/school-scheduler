@@ -577,11 +577,13 @@ function calendarTable(data, entryHtml, slotHook) {
 // ------------------------------------------------------------------ schedule
 
 async function renderSchedule(root) {
-  const [schedule, check, overview, students, teachers, subjects, rooms, slots] =
+  const [schedule, check, overview, settings, students, teachers, subjects,
+         rooms, slots] =
     await Promise.all([
       api("GET", "/api/schedule"),
       api("GET", "/api/schedule/check"),
       api("GET", "/api/views/overview"),
+      api("GET", "/api/settings"),
       list("students"), list("teachers"), list("subjects"),
       list("rooms"), list("timeslots")]);
   const sorted = sortSlots(slots);
@@ -589,16 +591,24 @@ async function renderSchedule(root) {
   const ctrl = el(`<div class="panel"><h2>Generate</h2>
     <div class="gen-groups">
       <fieldset class="gen-group"><legend>Objectives &amp; constraints</legend>
-        <div class="hard-box">
-          <div class="hard-title">🔒 Always satisfied</div>
+        <div class="hard-box" id="hard-box">
+          <div class="hard-title">🔒 Always satisfied
+            <span class="muted">— drop a priority here to enforce it</span></div>
           <ul class="hard-list">
             <li>teachers teach only their subjects, only when available</li>
             <li>students only when available; one lesson per timeslot</li>
-            <li>a teacher takes at most two students per timeslot</li>
             <li>room capacity is never exceeded</li>
-            <li>at most two lessons per student per day — and then in
-              consecutive periods</li>
           </ul>
+          <div class="hard-ctrl">a teacher teaches at most
+            <input type="number" id="set-tcap" min="1" max="4"
+              value="${settings.teacher_capacity}"> students per timeslot</div>
+          <div class="hard-ctrl">a student has at most
+            <input type="number" id="set-daycap" min="1" max="4"
+              value="${settings.student_day_cap}"> lessons per day</div>
+          <label class="hard-ctrl"><input type="checkbox" id="set-consec"${
+            settings.require_consecutive ? " checked" : ""}>
+            multiple lessons on one day must be in consecutive periods</label>
+          <ul id="hard-objs"></ul>
         </div>
         <div class="prio-title">Priorities — drag to reorder
           <span class="muted">(top = most important)</span></div>
@@ -635,42 +645,126 @@ async function renderSchedule(root) {
       <button class="action" id="gen">Generate schedule</button>
     </div>
     <div id="gen-result"></div></div>`);
-  // sortable priority list: item order = lexicographic objective priority
-  function renderPrioList() {
-    const ul = $("#prio-list", ctrl);
-    ul.innerHTML = "";
-    let dragKey = null;
-    state.objOrder.forEach((key, i) => {
+  // Objective cards live in TWO lists: the sortable priority list, and
+  // the hard box (promoted = enforced as a hard cap, stored in settings).
+  const caps = settings.objective_caps || {};
+  const CAP_DEFAULTS = { student_double_day: 0, teacher_slot_spread: 1,
+                         teacher_working_day: 30, teacher_day_spread: 1 };
+  let dragKey = null;
+
+  async function putSettings(newCaps) {
+    try {
+      await api("PUT", "/api/settings", {
+        teacher_capacity: parseInt($("#set-tcap", ctrl).value, 10) || 2,
+        student_day_cap: parseInt($("#set-daycap", ctrl).value, 10) || 2,
+        require_consecutive: $("#set-consec", ctrl).checked,
+        objective_caps: newCaps ?? caps,
+      });
+      render();   // everything revalidates against the new rules
+    } catch (e) { toast(e.message, true); render(); }
+  }
+  for (const id of ["set-tcap", "set-daycap", "set-consec"]) {
+    $(`#${id}`, ctrl).onchange = () => putSettings();
+  }
+
+  function startDrag(li, key) {
+    li.ondragstart = (e) => {
+      dragKey = key;
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", key);
+      li.classList.add("dragging");
+    };
+    li.ondragend = () => li.classList.remove("dragging");
+  }
+
+  function moveInOrder(moved, targetKey, after) {
+    const rest = state.objOrder.filter(k => k !== moved);
+    rest.splice(rest.indexOf(targetKey) + (after ? 1 : 0), 0, moved);
+    state.objOrder = rest;
+  }
+
+  function renderObjLists() {
+    const prioUl = $("#prio-list", ctrl);
+    const hardUl = $("#hard-objs", ctrl);
+    prioUl.innerHTML = "";
+    hardUl.innerHTML = "";
+
+    // promoted cards inside the hard box (order follows objOrder)
+    for (const key of state.objOrder.filter(k => k in caps)) {
+      const li = el(`<li class="prio-item hard-obj" draggable="true"
+        data-key="${key}">🔒 ${esc(OBJ_LABELS[key])}
+        <span class="hard-bound">≤ <input type="number" min="0" max="999"
+          value="${caps[key]}" data-bound="${key}"></span>
+        <span class="prio-grip" title="drag back to Priorities to relax">⠿</span></li>`);
+      startDrag(li, key);
+      const bound = li.querySelector("input");
+      bound.onchange = () => {
+        const v = parseInt(bound.value, 10);
+        if (!(v >= 0 && v <= 999)) return toast("bound must be 0-999", true);
+        putSettings({ ...caps, [key]: v });
+      };
+      hardUl.append(li);
+    }
+
+    // sortable priority cards (unpromoted only)
+    state.objOrder.filter(k => !(k in caps)).forEach((key, i) => {
       const li = el(`<li class="prio-item" draggable="true"
         data-key="${key}"><span class="prio-rank">${i + 1}</span>
         ${esc(OBJ_LABELS[key])} <span class="prio-grip">⠿</span></li>`);
-      li.ondragstart = (e) => {
-        dragKey = key;
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", key);
-        li.classList.add("dragging");
-      };
-      li.ondragend = () => li.classList.remove("dragging");
+      startDrag(li, key);
       li.ondragover = (e) => { e.preventDefault(); li.classList.add("drag-over"); };
       li.ondragleave = () => li.classList.remove("drag-over");
       li.ondrop = (e) => {
         e.preventDefault();
+        e.stopPropagation();
         li.classList.remove("drag-over");
         const moved = dragKey || e.dataTransfer.getData("text/plain");
         dragKey = null;
         if (!moved || moved === key) return;
-        const rest = state.objOrder.filter(k => k !== moved);
-        // drop on the upper half inserts before, lower half after
         const rect = li.getBoundingClientRect();
-        const after = e.clientY > rect.top + rect.height / 2;
-        rest.splice(rest.indexOf(key) + (after ? 1 : 0), 0, moved);
-        state.objOrder = rest;
-        renderPrioList();
+        moveInOrder(moved, key, e.clientY > rect.top + rect.height / 2);
+        if (moved in caps) {              // demote: drop the hard cap
+          const nc = { ...caps };
+          delete nc[moved];
+          putSettings(nc);
+        } else renderObjLists();
       };
-      ul.append(li);
+      prioUl.append(li);
     });
+
+    // dropping on the list's empty space appends to the end
+    prioUl.ondragover = (e) => e.preventDefault();
+    prioUl.ondrop = (e) => {
+      if (e.target !== prioUl) return;
+      e.preventDefault();
+      const moved = dragKey || e.dataTransfer.getData("text/plain");
+      dragKey = null;
+      if (!moved) return;
+      state.objOrder = state.objOrder.filter(k => k !== moved).concat(moved);
+      if (moved in caps) {
+        const nc = { ...caps };
+        delete nc[moved];
+        putSettings(nc);
+      } else renderObjLists();
+    };
   }
-  renderPrioList();
+  renderObjLists();
+
+  // dropping a priority card anywhere on the hard box promotes it
+  const hardBox = $("#hard-box", ctrl);
+  hardBox.ondragover = (e) => {
+    if (dragKey) { e.preventDefault(); hardBox.classList.add("drag-over"); }
+  };
+  hardBox.ondragleave = () => hardBox.classList.remove("drag-over");
+  hardBox.ondrop = (e) => {
+    e.preventDefault();
+    hardBox.classList.remove("drag-over");
+    const moved = dragKey || e.dataTransfer.getData("text/plain");
+    dragKey = null;
+    if (moved && !(moved in caps)) {
+      putSettings({ ...caps, [moved]: CAP_DEFAULTS[moved] });
+    }
+  };
 
   $("#gen", ctrl).onclick = async () => {
     const btn = $("#gen", ctrl);
