@@ -17,7 +17,7 @@ from .scheduler import (Dataset, Lesson, Room, Timeslot, check_input_problems,
                         coverage_report, optimize_teacher_days,
                         schedule_objective, solve, student_day_stats,
                         teacher_day_stats, validate)
-from .solver_v2 import solve_v2
+from .solver_v2 import SolverConfig, solve_v2
 
 from contextlib import asynccontextmanager
 
@@ -371,6 +371,10 @@ class GenerateOptions(BaseModel):
     compress_teacher_days: bool = True
     solver: str = "v1"       # "v1" (backtracking + local search) or "v2"
     #                          (CP-SAT exact optimization, falls back to v1)
+    # approximate search budget for the v2 solver, in seconds (it keeps
+    # searching for the whole budget; runs are reproducible because the
+    # cutoff is measured in CP-SAT's deterministic work units)
+    v2_time_budget: float = Field(default=8.0, ge=1, le=600)
 
 
 class LessonIn(BaseModel):
@@ -399,7 +403,10 @@ def generate_schedule(opts: GenerateOptions,
     if opts.solver == "v2":
         # exact CP-SAT optimization; validates its own output and falls
         # back to the v1 pipeline internally when it cannot do better
-        result = solve_v2(data, fixed_lessons=fixed)
+        cfg = SolverConfig(
+            deterministic_time=opts.v2_time_budget,
+            time_limit_seconds=opts.v2_time_budget * 3 + 10)  # wall safety
+        result = solve_v2(data, config=cfg, fixed_lessons=fixed)
     else:
         result = solve(data, fixed_lessons=fixed)
         if opts.compress_teacher_days:

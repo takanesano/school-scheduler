@@ -114,6 +114,18 @@ button.small {
                       padding: 0.15rem 0.3rem; }
 .lesson-edit-actions { display: flex; gap: 0.3rem; margin-top: 0.25rem; }
 .lesson-edit-actions .action { padding: 0.15rem 0.5rem; font-size: 0.78rem; }
+.gen-groups { display: flex; gap: 1rem; flex-wrap: wrap;
+              margin-bottom: 0.8rem; align-items: stretch; }
+.gen-group { border: 1px solid var(--border); border-radius: 6px;
+             padding: 0.6rem 0.9rem 0.7rem; margin: 0; min-width: 20rem;
+             flex: 1 1 20rem; }
+.gen-group legend { font-size: 0.82rem; font-weight: 600;
+                    color: var(--muted); padding: 0 0.35rem; }
+.gen-group label { display: block; margin: 0.3rem 0; }
+.gen-group label.gen-inline { display: inline-block; }
+.gen-group p { margin: 0.4rem 0 0; }
+.gen-warning { margin-top: 0.4rem; }
+#exact-opts { margin: 0.2rem 0 0 1.4rem; }
 .workload { margin-top: 0.7rem; }
 .workload-tables { display: flex; gap: 1.2rem; flex-wrap: wrap;
                    align-items: flex-start; }

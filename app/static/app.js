@@ -2,7 +2,7 @@
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const state = { tab: "schedule", keep: false, caution: true,
-                compress: true, exact: false,
+                compress: true, exact: false, exactBudget: 8,
                 calView: "overview", calPerson: null };
 
 const TABS = [
@@ -579,34 +579,63 @@ async function renderSchedule(root) {
   const sorted = sortSlots(slots);
 
   const ctrl = el(`<div class="panel"><h2>Generate</h2>
+    <div class="gen-groups">
+      <fieldset class="gen-group"><legend>Solver</legend>
+        <label><input type="checkbox" id="opt-keep"${state.keep ? " checked" : ""}>
+          keep existing lessons</label>
+        <label title="Models the whole problem as a constraint program
+          (OR-tools CP-SAT) and optimizes all objectives at once. Usually
+          strictly better than the standard solver; falls back to it
+          automatically when it cannot do better.">
+          <input type="checkbox" id="opt-exact"${state.exact ? " checked" : ""}>
+          exact optimizer (CP-SAT)</label>
+        <div id="exact-opts"${state.exact ? "" : " hidden"}>
+          <label class="gen-inline">search budget
+            <input type="number" id="opt-exact-budget" min="1" max="600"
+              value="${state.exactBudget}" style="width:5rem"> s</label>
+          <div class="warning gen-warning">⏳ The exact optimizer keeps
+            searching for the whole budget, so generating will take
+            roughly this long. Larger budgets can find better
+            schedules.</div>
+        </div>
+      </fieldset>
+      <fieldset class="gen-group"><legend>Objectives &amp; constraints</legend>
+        <label id="compress-label"><input type="checkbox" id="opt-compress"${
+          state.compress ? " checked" : ""}${state.exact ? " disabled" : ""}>
+          pack teacher days &amp; balance teachers</label>
+        <p class="muted" id="compress-note"${state.exact ? "" : " hidden"}>
+          The exact optimizer always optimizes all objectives at once —
+          this toggle only applies to the standard solver.</p>
+        <p class="muted">Always enforced: students get at most two lessons
+          per day — consecutive periods when two — and one per day
+          whenever possible; teachers take at most two students per
+          timeslot.</p>
+      </fieldset>
+    </div>
     <div class="row">
-      <label><input type="checkbox" id="opt-keep"${state.keep ? " checked" : ""}>
-        keep existing lessons</label>
-      <label><input type="checkbox" id="opt-compress"${state.compress ? " checked" : ""}>
-        pack teacher days &amp; balance teachers</label>
-      <label title="Models the whole problem as a constraint program
-        (OR-tools CP-SAT) and optimizes all objectives at once. Slower
-        (a few seconds) but usually strictly better; falls back to the
-        standard solver automatically.">
-        <input type="checkbox" id="opt-exact"${state.exact ? " checked" : ""}>
-        exact optimizer (CP-SAT)</label>
       <button class="action" id="gen">Generate schedule</button>
       <button class="action secondary" id="clear">Clear schedule</button>
     </div>
-    <p class="muted">Students get at most two lessons per day — consecutive
-      periods when two — and one per day whenever possible.</p>
     <div id="gen-result"></div></div>`);
   $("#gen", ctrl).onclick = async () => {
     const btn = $("#gen", ctrl);
-    btn.disabled = true; btn.textContent = "Solving…";
     state.keep = $("#opt-keep", ctrl).checked;
     state.compress = $("#opt-compress", ctrl).checked;
     state.exact = $("#opt-exact", ctrl).checked;
+    const budget = parseInt($("#opt-exact-budget", ctrl).value, 10);
+    if (state.exact && !(budget >= 1 && budget <= 600)) {
+      return toast("search budget must be between 1 and 600 seconds", true);
+    }
+    state.exactBudget = budget || state.exactBudget;
+    btn.disabled = true;
+    btn.textContent = state.exact
+      ? `Solving… (~${state.exactBudget}s)` : "Solving…";
     try {
       const res = await api("POST", "/api/schedule/generate", {
         keep_existing: state.keep,
         compress_teacher_days: state.compress,
         solver: state.exact ? "v2" : "v1",
+        v2_time_budget: state.exactBudget,
       });
       if (res.complete) {
         toast(`Complete schedule: ${res.scheduled} lessons`
@@ -617,7 +646,16 @@ async function renderSchedule(root) {
   };
   $("#opt-keep", ctrl).onchange = (e) => { state.keep = e.target.checked; };
   $("#opt-compress", ctrl).onchange = (e) => { state.compress = e.target.checked; };
-  $("#opt-exact", ctrl).onchange = (e) => { state.exact = e.target.checked; };
+  $("#opt-exact", ctrl).onchange = (e) => {
+    state.exact = e.target.checked;
+    $("#exact-opts", ctrl).hidden = !state.exact;
+    $("#opt-compress", ctrl).disabled = state.exact;
+    $("#compress-note", ctrl).hidden = !state.exact;
+  };
+  $("#opt-exact-budget", ctrl).onchange = (e) => {
+    const v = parseInt(e.target.value, 10);
+    if (v >= 1 && v <= 600) state.exactBudget = v;
+  };
   $("#clear", ctrl).onclick = async () => {
     if (!await appConfirm("Delete all scheduled lessons?", "Delete all")) return;
     await api("DELETE", "/api/schedule").catch(e => toast(e.message, true));

@@ -63,14 +63,16 @@ per-teacher lessons / working-days table and a per-student table flagging
 every two-lesson day with its date, plus all four metrics — so each
 objective can be checked at a glance.
 
-An optional **exact optimizer** (the "exact optimizer (CP-SAT)" checkbox)
-models the whole problem as a constraint program with OR-tools CP-SAT and
-optimizes every objective at once. It is slower (a few seconds) but
-usually strictly better — on the sample term it needs 4 fewer teacher
-working days than the standard solver — and it automatically falls back
-to the standard solver when it cannot do better (its output is always
-re-checked by the same validator). Requires the optional `ortools`
-dependency.
+An optional **exact optimizer** (the "exact optimizer (CP-SAT)" checkbox
+in the Generate panel's Solver group) models the whole problem as a
+constraint program with OR-tools CP-SAT and optimizes every objective at
+once. It keeps searching for its whole **search budget** (configurable,
+default ~8 s), so generation takes roughly that long — but the result is
+usually strictly better; on the sample term it needs several fewer
+teacher working days than the standard solver. It automatically falls
+back to the standard solver when it cannot do better (its output is
+always re-checked by the same validator). Requires the optional
+`ortools` dependency.
 
 The solver uses backtracking search, so it finds a complete schedule
 whenever one exists (within a node budget). If the inputs make a complete

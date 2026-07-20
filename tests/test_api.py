@@ -341,6 +341,26 @@ def test_generate_rejects_unknown_solver(client):
     assert r.status_code == 422
 
 
+@pytest.mark.parametrize("budget", [0, 0.5, 601, -3])
+def test_generate_rejects_out_of_range_v2_budget(client, budget):
+    r = client.post("/api/schedule/generate",
+                    json={"solver": "v2", "v2_time_budget": budget})
+    assert r.status_code == 422
+
+
+def test_generate_v2_accepts_small_budget(client):
+    pytest.importorskip("ortools")
+    seed_world(client)
+    client.post("/api/student_needs",
+                json={"student_id": "s1", "subject_id": "math",
+                      "sessions": 1})
+    r = client.post("/api/schedule/generate",
+                    json={"solver": "v2", "v2_time_budget": 1})
+    assert r.status_code == 200
+    assert r.json()["complete"] is True
+    assert client.get("/api/schedule").json()["violations"] == []
+
+
 def test_input_problem_diagnostics(client):
     seed_world(client)
     client.post("/api/subjects", json={"id": "eng", "name": "English"})
