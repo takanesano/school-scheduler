@@ -125,6 +125,7 @@ button.small {
 .gen-group label.gen-inline { display: inline-block; }
 .gen-group p { margin: 0.4rem 0 0; }
 .gen-warning { margin-top: 0.4rem; }
+.gen-actions { justify-content: flex-end; }
 #exact-opts { margin: 0.2rem 0 0 1.4rem; }
 .workload { margin-top: 0.7rem; }
 .workload-tables { display: flex; gap: 1.2rem; flex-wrap: wrap;

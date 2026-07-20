@@ -580,6 +580,18 @@ async function renderSchedule(root) {
 
   const ctrl = el(`<div class="panel"><h2>Generate</h2>
     <div class="gen-groups">
+      <fieldset class="gen-group"><legend>Objectives &amp; constraints</legend>
+        <label id="compress-label"><input type="checkbox" id="opt-compress"${
+          state.compress ? " checked" : ""}${state.exact ? " disabled" : ""}>
+          pack teacher days &amp; balance teachers</label>
+        <p class="muted" id="compress-note"${state.exact ? "" : " hidden"}>
+          The exact optimizer always optimizes all objectives at once —
+          this toggle only applies to the standard solver.</p>
+        <p class="muted">Always enforced: students get at most two lessons
+          per day — consecutive periods when two — and one per day
+          whenever possible; teachers take at most two students per
+          timeslot.</p>
+      </fieldset>
       <fieldset class="gen-group"><legend>Solver</legend>
         <label><input type="checkbox" id="opt-keep"${state.keep ? " checked" : ""}>
           keep existing lessons</label>
@@ -599,22 +611,10 @@ async function renderSchedule(root) {
             schedules.</div>
         </div>
       </fieldset>
-      <fieldset class="gen-group"><legend>Objectives &amp; constraints</legend>
-        <label id="compress-label"><input type="checkbox" id="opt-compress"${
-          state.compress ? " checked" : ""}${state.exact ? " disabled" : ""}>
-          pack teacher days &amp; balance teachers</label>
-        <p class="muted" id="compress-note"${state.exact ? "" : " hidden"}>
-          The exact optimizer always optimizes all objectives at once —
-          this toggle only applies to the standard solver.</p>
-        <p class="muted">Always enforced: students get at most two lessons
-          per day — consecutive periods when two — and one per day
-          whenever possible; teachers take at most two students per
-          timeslot.</p>
-      </fieldset>
     </div>
-    <div class="row">
-      <button class="action" id="gen">Generate schedule</button>
+    <div class="row gen-actions">
       <button class="action secondary" id="clear">Clear schedule</button>
+      <button class="action" id="gen">Generate schedule</button>
     </div>
     <div id="gen-result"></div></div>`);
   $("#gen", ctrl).onclick = async () => {
