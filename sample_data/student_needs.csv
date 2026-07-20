@@ -1,0 +1,13 @@
+student_id,subject_id,sessions
+s1,math,4
+s1,eng,2
+s2,eng,4
+s2,jpn,2
+s3,math,2
+s3,sci,2
+s4,soc,2
+s4,jpn,2
+s5,math,4
+s5,sci,2
+s6,eng,2
+s6,soc,2
