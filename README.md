@@ -1,5 +1,9 @@
 # Cram School Scheduler
 
+> 🇯🇵 **Windows で使いたい方(初心者向け)**:
+> [かんたんインストールガイド (INSTALL.ja.md)](INSTALL.ja.md) を
+> ご覧ください。コマンド入力なし・ダブルクリックだけで動かせます。
+
 A locally-run web application for building and managing the lesson schedule
 of a cram school term — e.g. a summer school where every calendar day is
 unique. It tracks students and the subjects they need, teachers and the
