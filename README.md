@@ -63,6 +63,11 @@ per-teacher lessons / working-days table and a per-student table flagging
 every two-lesson day with its date, plus all four metrics — so each
 objective can be checked at a glance.
 
+In the Generate panel, the hard constraints are listed in a locked
+"Always satisfied" box, and the four soft objectives below it are a
+**drag-to-reorder priority list** — the order is the lexicographic
+priority both solvers optimize (top outranks everything beneath it).
+
 An optional **exact optimizer** (the "exact optimizer (CP-SAT)" checkbox
 in the Generate panel's Solver group) models the whole problem as a
 constraint program with OR-tools CP-SAT and optimizes every objective at

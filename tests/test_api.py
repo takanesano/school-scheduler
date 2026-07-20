@@ -348,6 +348,44 @@ def test_generate_rejects_out_of_range_v2_budget(client, budget):
     assert r.status_code == 422
 
 
+@pytest.mark.parametrize("order", [
+    ["student_double_day"],                              # incomplete
+    ["a", "b", "c", "d"],                                # unknown names
+    ["student_double_day", "student_double_day",
+     "teacher_working_day", "teacher_day_spread"],       # duplicate
+])
+def test_generate_rejects_bad_objective_order(client, order):
+    r = client.post("/api/schedule/generate",
+                    json={"objective_order": order})
+    assert r.status_code == 422
+    assert "permutation" in r.json()["detail"]
+
+
+def test_generate_honors_objective_order(client):
+    """Days-first priority keeps both lessons on one teacher-day where
+    the default balance-first order would use two teachers."""
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    client.post("/api/teacher_availability",
+                json={"teacher_id": "t2", "timeslot_id": "tue-1"})
+    client.post("/api/rooms", json={"id": "r2", "name": "Room 2"})
+    for st in ("s1", "s2"):
+        client.post("/api/student_needs",
+                    json={"student_id": st, "subject_id": "math",
+                          "sessions": 1})
+    days_first = ["student_double_day", "teacher_working_day",
+                  "teacher_slot_spread", "teacher_day_spread"]
+    r = client.post("/api/schedule/generate",
+                    json={"objective_order": days_first})
+    assert r.json()["complete"] is True
+    body = client.get("/api/schedule").json()
+    assert body["objective"]["total_days"] == 1
+    teachers = {l["teacher_id"] for l in body["lessons"]}
+    assert len(teachers) == 1
+
+
 def test_generate_v2_accepts_small_budget(client):
     pytest.importorskip("ortools")
     seed_world(client)

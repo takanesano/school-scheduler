@@ -47,6 +47,12 @@ weeks and marks non-term days `in_term: false`.
   `student_day_stats` powers the Status-panel per-student monitor
   (`student_stats` in GET /api/schedule; rows with double days get the
   `double-day` warning highlight).
+- Soft-objective priority is USER-SORTABLE: `OBJECTIVE_TERMS` names the
+  four terms; `schedule_objective(data, lessons, order)` and
+  `ObjectiveWeights.lexicographic(order)` both take a permutation, and
+  generate accepts `objective_order` (422 on non-permutations). The UI's
+  drag list (`state.objOrder`, `#prio-list`) is the source of that
+  order; the "Always satisfied" box above it is display-only.
 - `optimize_teacher_days` is a post-solve local search (day-block handover
   and single-lesson moves) improving `schedule_objective` =
   (lesson-count spread, total teacher working days, day-count spread) over

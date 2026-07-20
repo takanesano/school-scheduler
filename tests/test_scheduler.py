@@ -549,6 +549,42 @@ def test_optimize_balances_realistic_lopsided_schedule():
     assert loads.total() == 6
 
 
+def test_schedule_objective_custom_order_permutes_tuple():
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+               Lesson("s1", "eng", "t1", "r1", "mon-2", id=2)]
+    default = schedule_objective(d, lessons)
+    reordered = schedule_objective(
+        d, lessons, ["teacher_working_day", "teacher_day_spread",
+                     "student_double_day", "teacher_slot_spread"])
+    assert reordered == (default[2], default[3], default[0], default[1])
+
+
+def test_optimizer_honors_objective_order():
+    """Same instance as the idle-teacher rebalance test: with the default
+    order (balance first) a lesson moves to t2 at the cost of a second
+    working day; with few-working-days prioritized, everything stays on
+    t1's single day."""
+    def build():
+        d = make_data()
+        d.teacher_availability = (
+            {("t1", s) for s in d.timeslots}
+            | {("t2", "tue-1"), ("t2", "tue-2")})
+        return d, [Lesson("s1", "math", "t1", "r1", "mon-1"),
+                   Lesson("s2", "eng", "t1", "r1", "mon-2")]
+
+    d, lessons = build()
+    balanced = optimize_teacher_days(d, list(lessons))
+    assert {l.teacher_id for l in balanced} == {"t1", "t2"}
+
+    d, lessons = build()
+    days_first = optimize_teacher_days(
+        d, list(lessons),
+        objective_order=["student_double_day", "teacher_working_day",
+                         "teacher_slot_spread", "teacher_day_spread"])
+    assert {l.teacher_id for l in days_first} == {"t1"}   # 1 day kept
+
+
 def test_optimize_never_touches_invalid_schedule():
     d = make_data()
     bad = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),

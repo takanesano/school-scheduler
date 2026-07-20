@@ -1,8 +1,16 @@
 "use strict";
 
 const $ = (sel, el = document) => el.querySelector(sel);
+const OBJ_LABELS = {
+  student_double_day: "One lesson per day per student",
+  teacher_slot_spread: "Even lesson counts across teachers",
+  teacher_working_day: "Few teacher working days",
+  teacher_day_spread: "Even working-day counts across teachers",
+};
+
 const state = { tab: "schedule", keep: false, caution: true,
                 compress: true, exact: false, exactBudget: 8,
+                objOrder: Object.keys(OBJ_LABELS),
                 calView: "overview", calPerson: null };
 
 const TABS = [
@@ -581,16 +589,26 @@ async function renderSchedule(root) {
   const ctrl = el(`<div class="panel"><h2>Generate</h2>
     <div class="gen-groups">
       <fieldset class="gen-group"><legend>Objectives &amp; constraints</legend>
+        <div class="hard-box">
+          <div class="hard-title">🔒 Always satisfied</div>
+          <ul class="hard-list">
+            <li>teachers teach only their subjects, only when available</li>
+            <li>students only when available; one lesson per timeslot</li>
+            <li>a teacher takes at most two students per timeslot</li>
+            <li>room capacity is never exceeded</li>
+            <li>at most two lessons per student per day — and then in
+              consecutive periods</li>
+          </ul>
+        </div>
+        <div class="prio-title">Priorities — drag to reorder
+          <span class="muted">(top = most important)</span></div>
+        <ul id="prio-list"></ul>
         <label id="compress-label"><input type="checkbox" id="opt-compress"${
           state.compress ? " checked" : ""}${state.exact ? " disabled" : ""}>
-          pack teacher days &amp; balance teachers</label>
+          optimize these priorities (standard solver)</label>
         <p class="muted" id="compress-note"${state.exact ? "" : " hidden"}>
-          The exact optimizer always optimizes all objectives at once —
+          The exact optimizer always optimizes all priorities at once —
           this toggle only applies to the standard solver.</p>
-        <p class="muted">Always enforced: students get at most two lessons
-          per day — consecutive periods when two — and one per day
-          whenever possible; teachers take at most two students per
-          timeslot.</p>
       </fieldset>
       <fieldset class="gen-group"><legend>Solver</legend>
         <label><input type="checkbox" id="opt-keep"${state.keep ? " checked" : ""}>
@@ -617,6 +635,43 @@ async function renderSchedule(root) {
       <button class="action" id="gen">Generate schedule</button>
     </div>
     <div id="gen-result"></div></div>`);
+  // sortable priority list: item order = lexicographic objective priority
+  function renderPrioList() {
+    const ul = $("#prio-list", ctrl);
+    ul.innerHTML = "";
+    let dragKey = null;
+    state.objOrder.forEach((key, i) => {
+      const li = el(`<li class="prio-item" draggable="true"
+        data-key="${key}"><span class="prio-rank">${i + 1}</span>
+        ${esc(OBJ_LABELS[key])} <span class="prio-grip">⠿</span></li>`);
+      li.ondragstart = (e) => {
+        dragKey = key;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", key);
+        li.classList.add("dragging");
+      };
+      li.ondragend = () => li.classList.remove("dragging");
+      li.ondragover = (e) => { e.preventDefault(); li.classList.add("drag-over"); };
+      li.ondragleave = () => li.classList.remove("drag-over");
+      li.ondrop = (e) => {
+        e.preventDefault();
+        li.classList.remove("drag-over");
+        const moved = dragKey || e.dataTransfer.getData("text/plain");
+        dragKey = null;
+        if (!moved || moved === key) return;
+        const rest = state.objOrder.filter(k => k !== moved);
+        // drop on the upper half inserts before, lower half after
+        const rect = li.getBoundingClientRect();
+        const after = e.clientY > rect.top + rect.height / 2;
+        rest.splice(rest.indexOf(key) + (after ? 1 : 0), 0, moved);
+        state.objOrder = rest;
+        renderPrioList();
+      };
+      ul.append(li);
+    });
+  }
+  renderPrioList();
+
   $("#gen", ctrl).onclick = async () => {
     const btn = $("#gen", ctrl);
     state.keep = $("#opt-keep", ctrl).checked;
@@ -636,6 +691,7 @@ async function renderSchedule(root) {
         compress_teacher_days: state.compress,
         solver: state.exact ? "v2" : "v1",
         v2_time_budget: state.exactBudget,
+        objective_order: state.objOrder,
       });
       if (res.complete) {
         toast(`Complete schedule: ${res.scheduled} lessons`

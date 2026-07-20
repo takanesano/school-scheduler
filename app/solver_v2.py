@@ -37,10 +37,10 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 
-from .scheduler import (Dataset, Lesson, SolveResult, _slot_sort_key,
-                        coverage_report, eligible_teachers,
-                        optimize_teacher_days, solve, student_double_days,
-                        teacher_day_stats, validate)
+from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, SolveResult,
+                        _slot_sort_key, coverage_report, eligible_teachers,
+                        objective_term_values, optimize_teacher_days, solve,
+                        validate)
 
 
 @dataclass(frozen=True)
@@ -61,12 +61,20 @@ class ObjectiveWeights:
     #                                   reference schedule (rescheduling)
 
     @classmethod
-    def lexicographic(cls) -> "ObjectiveWeights":
-        """Weights that reproduce v1's strict priority order."""
-        return cls(student_double_day=1_000_000.0,
-                   teacher_slot_spread=10_000.0,
-                   teacher_working_day=100.0,
-                   teacher_day_spread=1.0)
+    def lexicographic(cls, order: list[str] | None = None
+                      ) -> "ObjectiveWeights":
+        """Weights giving a strict priority order (default: v1's).
+
+        ``order`` is a permutation of ``scheduler.OBJECTIVE_TERMS``,
+        most important first; each rank's weight dominates everything
+        below it combined.
+        """
+        order = list(order or OBJECTIVE_TERMS)
+        if sorted(order) != sorted(OBJECTIVE_TERMS):
+            raise ValueError(
+                f"order must be a permutation of {OBJECTIVE_TERMS}")
+        magnitudes = [1_000_000.0, 10_000.0, 100.0, 1.0]
+        return cls(**{name: magnitudes[i] for i, name in enumerate(order)})
 
 
 @dataclass(frozen=True)
@@ -91,23 +99,14 @@ class SolverConfig:
 def objective_terms(data: Dataset, lessons: list[Lesson],
                     reference: list[Lesson] | None = None) -> dict[str, int]:
     """The named objective terms, evaluated on a concrete schedule."""
-    stats = teacher_day_stats(data, lessons)
-    elig = eligible_teachers(data)
-    loads = [stats[t]["lessons"] for t in elig if t in stats]
-    days = [len(stats[t]["days"]) for t in elig if t in stats]
     changed = 0
     if reference is not None:
         key = (lambda l: (l.student_id, l.subject_id, l.teacher_id,
                           l.room_id, l.timeslot_id))
         changed = sum((Counter(map(key, reference))
                        - Counter(map(key, lessons))).values())
-    return {
-        "student_double_day": student_double_days(data, lessons),
-        "teacher_slot_spread": (max(loads) - min(loads)) if loads else 0,
-        "teacher_working_day": sum(len(s["days"]) for s in stats.values()),
-        "teacher_day_spread": (max(days) - min(days)) if days else 0,
-        "changed_lesson": changed,
-    }
+    return {**objective_term_values(data, lessons),
+            "changed_lesson": changed}
 
 
 def weighted_cost(data: Dataset, lessons: list[Lesson],
@@ -126,9 +125,14 @@ def _v1_pipeline(data: Dataset, config: SolverConfig,
     if result.complete:
         pinned = list(fixed_lessons or [])
         movable = [l for l in result.lessons if l not in pinned]
+        # hill-climb in the priority order the weights imply, so the v1
+        # fallback honors a custom objective_order too
+        order = sorted(OBJECTIVE_TERMS,
+                       key=lambda n: -getattr(config.weights, n))
         result.lessons = optimize_teacher_days(
             data, movable, fixed=pinned,
-            teacher_capacity=config.teacher_capacity)
+            teacher_capacity=config.teacher_capacity,
+            objective_order=order)
     return result
 
 

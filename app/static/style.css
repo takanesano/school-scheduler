@@ -126,6 +126,26 @@ button.small {
 .gen-group p { margin: 0.4rem 0 0; }
 .gen-warning { margin-top: 0.4rem; }
 .gen-actions { justify-content: flex-end; }
+.hard-box { border: 1px solid var(--border); border-left: 3px solid var(--muted);
+            border-radius: 5px; padding: 0.45rem 0.7rem; background: var(--bg); }
+.hard-title { font-size: 0.8rem; font-weight: 600; margin-bottom: 0.25rem; }
+.hard-list { margin: 0; padding-left: 1.1rem; font-size: 0.78rem;
+             color: var(--muted); }
+.hard-list li { margin: 0.1rem 0; }
+.prio-title { font-size: 0.8rem; font-weight: 600; margin: 0.7rem 0 0.3rem; }
+#prio-list { list-style: none; margin: 0; padding: 0; }
+.prio-item { display: flex; align-items: center; gap: 0.5rem;
+             border: 1px solid var(--border); border-radius: 5px;
+             background: var(--panel); padding: 0.3rem 0.55rem;
+             margin: 0.25rem 0; font-size: 0.85rem; cursor: grab; }
+.prio-item:active { cursor: grabbing; }
+.prio-item.dragging { opacity: 0.5; }
+.prio-item.drag-over { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.prio-rank { background: var(--accent); color: #fff; border-radius: 50%;
+             width: 1.25rem; height: 1.25rem; display: inline-flex;
+             align-items: center; justify-content: center;
+             font-size: 0.72rem; font-weight: 700; flex: none; }
+.prio-grip { margin-left: auto; color: var(--muted); }
 #exact-opts { margin: 0.2rem 0 0 1.4rem; }
 .workload { margin-top: 0.7rem; }
 .workload-tables { display: flex; gap: 1.2rem; flex-wrap: wrap;

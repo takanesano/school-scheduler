@@ -477,30 +477,48 @@ def student_double_days(data: Dataset, lessons: list[Lesson]) -> int:
     return sum(1 for n in per_day.values() if n >= 2)
 
 
-def schedule_objective(data: Dataset,
-                       lessons: list[Lesson]) -> tuple[int, int, int, int]:
-    """(student two-lesson days, lesson-count spread, total working days,
-    day-count spread).
+# The four soft-objective terms, in the DEFAULT priority order. The user
+# can reorder them (UI drag list / `objective_order` on generate).
+OBJECTIVE_TERMS = ("student_double_day", "teacher_slot_spread",
+                   "teacher_working_day", "teacher_day_spread")
 
-    Lower is better; compared lexicographically: giving students one
-    lesson per day (O1) beats evening out teacher lesson counts (O2),
-    which beats packing teacher days (O3), which beats evening out
-    teacher day counts (O4).
-    """
+
+def objective_term_values(data: Dataset,
+                          lessons: list[Lesson]) -> dict[str, int]:
+    """Each soft-objective term evaluated on a concrete schedule."""
     stats = teacher_day_stats(data, lessons)
     elig = eligible_teachers(data)
     slot_counts = [stats[t]["lessons"] for t in elig if t in stats]
     day_counts = [len(stats[t]["days"]) for t in elig if t in stats]
-    total = sum(len(s["days"]) for s in stats.values())
-    slot_spread = (max(slot_counts) - min(slot_counts)) if slot_counts else 0
-    day_spread = (max(day_counts) - min(day_counts)) if day_counts else 0
-    return (student_double_days(data, lessons), slot_spread, total,
-            day_spread)
+    return {
+        "student_double_day": student_double_days(data, lessons),
+        "teacher_slot_spread":
+            (max(slot_counts) - min(slot_counts)) if slot_counts else 0,
+        "teacher_working_day":
+            sum(len(s["days"]) for s in stats.values()),
+        "teacher_day_spread":
+            (max(day_counts) - min(day_counts)) if day_counts else 0,
+    }
+
+
+def schedule_objective(data: Dataset, lessons: list[Lesson],
+                       order: tuple[str, ...] | list[str] | None = None
+                       ) -> tuple[int, ...]:
+    """The soft-objective terms as a tuple, compared lexicographically.
+
+    ``order`` (a permutation of OBJECTIVE_TERMS) decides which term
+    dominates; earlier = more important. Default order: one lesson per
+    day per student ≻ even teacher lesson counts ≻ few teacher working
+    days ≻ even teacher day counts.
+    """
+    values = objective_term_values(data, lessons)
+    return tuple(values[name] for name in (order or OBJECTIVE_TERMS))
 
 
 def optimize_teacher_days(data: Dataset, movable: list[Lesson],
                           fixed: list[Lesson] | None = None,
                           teacher_capacity: int = 2,
+                          objective_order: list[str] | None = None,
                           max_rounds: int = 200) -> list[Lesson]:
     """Deterministic local search improving ``schedule_objective``.
 
@@ -528,8 +546,8 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
     def ok(candidate: list[Lesson]) -> bool:
         return not validate(data, fixed + candidate, teacher_capacity)
 
-    def obj(candidate: list[Lesson]) -> tuple[int, int, int, int]:
-        return schedule_objective(data, fixed + candidate)
+    def obj(candidate: list[Lesson]) -> tuple[int, ...]:
+        return schedule_objective(data, fixed + candidate, objective_order)
 
     if not ok(work):
         return fixed + work   # never touch an already-broken schedule

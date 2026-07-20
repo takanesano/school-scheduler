@@ -13,11 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import csv_io, db, views
-from .scheduler import (Dataset, Lesson, Room, Timeslot, check_input_problems,
-                        coverage_report, optimize_teacher_days,
-                        schedule_objective, solve, student_day_stats,
-                        teacher_day_stats, validate)
-from .solver_v2 import SolverConfig, solve_v2
+from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, Room, Timeslot,
+                        check_input_problems, coverage_report,
+                        optimize_teacher_days, schedule_objective, solve,
+                        student_day_stats, teacher_day_stats, validate)
+from .solver_v2 import ObjectiveWeights, SolverConfig, solve_v2
 
 from contextlib import asynccontextmanager
 
@@ -375,6 +375,9 @@ class GenerateOptions(BaseModel):
     # searching for the whole budget; runs are reproducible because the
     # cutoff is measured in CP-SAT's deterministic work units)
     v2_time_budget: float = Field(default=8.0, ge=1, le=600)
+    # soft-objective priority, most important first; must be a
+    # permutation of scheduler.OBJECTIVE_TERMS (None = default order)
+    objective_order: list[str] | None = None
 
 
 class LessonIn(BaseModel):
@@ -397,6 +400,11 @@ def generate_schedule(opts: GenerateOptions,
                       conn: sqlite3.Connection = Depends(get_conn)):
     if opts.solver not in ("v1", "v2"):
         raise HTTPException(422, "solver must be 'v1' or 'v2'")
+    order = opts.objective_order
+    if order is not None and sorted(order) != sorted(OBJECTIVE_TERMS):
+        raise HTTPException(
+            422, "objective_order must be a permutation of "
+                 + ", ".join(OBJECTIVE_TERMS))
     data = load_dataset(conn)
     problems = check_input_problems(data)
     fixed = load_lessons(conn) if opts.keep_existing else []
@@ -404,6 +412,7 @@ def generate_schedule(opts: GenerateOptions,
         # exact CP-SAT optimization; validates its own output and falls
         # back to the v1 pipeline internally when it cannot do better
         cfg = SolverConfig(
+            weights=ObjectiveWeights.lexicographic(order),
             deterministic_time=opts.v2_time_budget,
             time_limit_seconds=opts.v2_time_budget * 3 + 10)  # wall safety
         result = solve_v2(data, config=cfg, fixed_lessons=fixed)
@@ -415,7 +424,8 @@ def generate_schedule(opts: GenerateOptions,
             pinned = [l for l in result.lessons if l.id is not None]
             generated = [l for l in result.lessons if l.id is None]
             result.lessons = optimize_teacher_days(data, generated,
-                                                   fixed=pinned)
+                                                   fixed=pinned,
+                                                   objective_order=order)
     with conn:
         conn.execute("DELETE FROM lessons")
         conn.executemany(

@@ -46,6 +46,16 @@ def test_lexicographic_weights_dominate_in_order():
         > w.teacher_working_day > w.teacher_day_spread > 0
 
 
+def test_lexicographic_weights_follow_custom_order():
+    w = ObjectiveWeights.lexicographic(
+        ["teacher_working_day", "student_double_day",
+         "teacher_day_spread", "teacher_slot_spread"])
+    assert w.teacher_working_day > w.student_double_day \
+        > w.teacher_day_spread > w.teacher_slot_spread > 0
+    with pytest.raises(ValueError):
+        ObjectiveWeights.lexicographic(["student_double_day"])
+
+
 def test_objective_terms_and_weighted_cost():
     d = make_data()
     lessons = [Lesson("s1", "math", "t1", "r1", "mon-1"),
