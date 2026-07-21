@@ -622,12 +622,18 @@ async function renderSchedule(root) {
       <fieldset class="gen-group"><legend>Solver</legend>
         <label><input type="checkbox" id="opt-keep"${state.keep ? " checked" : ""}>
           keep existing lessons</label>
+        <label><input type="radio" name="solver-pick" id="opt-standard"${
+          state.exact ? "" : " checked"}>
+          <b>standard</b> — fast, good-but-approximate
+          <span class="muted">(usually well under a second)</span></label>
         <label title="Models the whole problem as a constraint program
-          (OR-tools CP-SAT) and optimizes all objectives at once. Usually
-          strictly better than the standard solver; falls back to it
-          automatically when it cannot do better.">
-          <input type="checkbox" id="opt-exact"${state.exact ? " checked" : ""}>
-          exact optimizer (CP-SAT)</label>
+          (OR-tools CP-SAT) and optimizes all priorities at once. Falls
+          back to the standard solver automatically when it cannot do
+          better.">
+          <input type="radio" name="solver-pick" id="opt-exact"${
+            state.exact ? " checked" : ""}>
+          <b>exact</b> (CP-SAT) — slower, best schedule it can prove
+          within its budget</label>
         <div id="exact-opts"${state.exact ? "" : " hidden"}>
           <label class="gen-inline">search budget
             <input type="number" id="opt-exact-budget" min="1" max="600"
@@ -833,12 +839,14 @@ async function renderSchedule(root) {
   };
   $("#opt-keep", ctrl).onchange = (e) => { state.keep = e.target.checked; };
   $("#opt-compress", ctrl).onchange = (e) => { state.compress = e.target.checked; };
-  $("#opt-exact", ctrl).onchange = (e) => {
-    state.exact = e.target.checked;
-    $("#exact-opts", ctrl).hidden = !state.exact;
-    $("#opt-compress", ctrl).disabled = state.exact;
-    $("#compress-note", ctrl).hidden = !state.exact;
-  };
+  function pickSolver(exact) {
+    state.exact = exact;
+    $("#exact-opts", ctrl).hidden = !exact;
+    $("#opt-compress", ctrl).disabled = exact;
+    $("#compress-note", ctrl).hidden = !exact;
+  }
+  $("#opt-standard", ctrl).onchange = () => pickSolver(false);
+  $("#opt-exact", ctrl).onchange = () => pickSolver(true);
   $("#opt-exact-budget", ctrl).onchange = (e) => {
     const v = parseInt(e.target.value, 10);
     if (v >= 1 && v <= 600) state.exactBudget = v;
