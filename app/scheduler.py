@@ -373,9 +373,12 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
     for (t, su) in sorted(data.teacher_subjects):
         teachers_for[su].append(t)
 
-    def candidates(st: str, su: str) -> list[tuple[str, str, str]]:
+    def candidates(st: str, su: str,
+                   limit: int | None = None) -> list[tuple[str, str, str]]:
         # least-loaded teachers first, so lessons spread evenly from the
-        # start instead of piling onto the alphabetically-first teacher
+        # start instead of piling onto the alphabetically-first teacher.
+        # ``limit`` stops the scan early — enough for MRV counting, which
+        # only needs to know whether this pair beats the current minimum.
         ranked = sorted(teachers_for.get(su, []),
                         key=lambda t: (state.teacher_total[t], t))
         opts = []
@@ -391,12 +394,20 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
                     if state.fits(st, su, t, r, s):
                         opts.append((busy_day, i, s, t, r))
                         break  # one room per (slot, teacher) is enough
+            if limit is not None and len(opts) >= limit:
+                break
         opts.sort(key=lambda x: (x[0], x[1]))
         return [(s, t, r) for (_, _, s, t, r) in opts]
 
     placed: list[Lesson] = []
     nodes = 0
     exhausted = False
+
+    # the search recurses once per requirement; large terms exceed
+    # Python's default 1000-frame limit
+    import sys
+    _old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(_old_limit, len(requirements) + 500))
 
     def search(remaining: list[tuple[str, str]]) -> bool:
         nonlocal nodes, exhausted
@@ -405,16 +416,27 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
         if nodes >= max_nodes:
             exhausted = True
             return False
-        # MRV: expand the requirement with the fewest candidates right now.
-        scored = []
-        for i, (st, su) in enumerate(remaining):
-            opts = candidates(st, su)
+        # MRV: expand the requirement with the fewest candidates right
+        # now. Duplicate (student, subject) requirements share the same
+        # candidate set, so score each UNIQUE pair once, and count with an
+        # early-exit limit — only "fewer than the current best" matters.
+        first_index: dict[tuple[str, str], int] = {}
+        for i, pair in enumerate(remaining):
+            if pair not in first_index:
+                first_index[pair] = i
+        best: tuple[int, int, tuple[str, str]] | None = None
+        for pair, i in first_index.items():
+            limit = best[0] if best else None
+            opts = candidates(*pair, limit=limit)
             if not opts:
                 return False  # dead end — some requirement is unplaceable
-            scored.append((len(opts), i, opts))
-        scored.sort(key=lambda x: (x[0], x[1]))
-        _, idx, opts = scored[0]
-        st, su = remaining[idx]
+            if best is None or len(opts) < best[0]:
+                best = (len(opts), i, pair)
+                if best[0] == 1:
+                    break     # cannot get more constrained than this
+        _, idx, (st, su) = best
+        # the counting pass may have truncated: branch on the FULL set
+        opts = candidates(st, su)
         rest = remaining[:idx] + remaining[idx + 1:]
         for (s, t, r) in opts:
             nodes += 1
@@ -432,7 +454,10 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
             state.remove(l)
         return False
 
-    complete = search(requirements) and not unschedulable
+    try:
+        complete = search(requirements) and not unschedulable
+    finally:
+        sys.setrecursionlimit(_old_limit)
 
     if not complete:
         # Fall back to a deterministic greedy fill so the user still gets the
@@ -602,6 +627,13 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
     """
     fixed = list(fixed or [])
     work = list(movable)
+
+    # Local search cost grows ~quadratically with schedule size (every
+    # candidate move re-validates the whole schedule). Beyond this size
+    # the hill climb is skipped — use the exact optimizer (CP-SAT) for
+    # quality on large instances; the raw solve is still valid.
+    if len(work) > 400:
+        return fixed + work
 
     def ok(candidate: list[Lesson]) -> bool:
         # objective caps are deliberately NOT checked here: the hill climb
