@@ -333,6 +333,43 @@ def test_solve_needs_backtracking():
     assert ("s2", "mon-2") in placed
 
 
+def test_solve_greedy_first_fast_path():
+    """Well-resourced instances complete via the greedy pass alone —
+    nodes_explored == 0 marks that no backtracking search was needed."""
+    d = make_data()
+    d.student_needs = {("s1", "math"): 2, ("s1", "eng"): 1,
+                       ("s2", "math"): 1, ("s2", "eng"): 2}
+    r = solve(d)
+    assert r.complete
+    assert r.nodes_explored == 0
+    assert_solution_valid(d, r)
+
+
+def test_solve_falls_back_to_search_when_greedy_traps():
+    """Greedy processes (s1, math) first and takes mon-1 — the only slot
+    s2 can use — so the greedy pass cannot finish and the exhaustive
+    search must backtrack to find the swap."""
+    d = Dataset()
+    d.students = {"s1": "A", "s2": "B"}
+    d.teachers = {"t1": "T"}
+    d.subjects = {"math": "Math"}
+    d.rooms = {"r1": Room("r1", "R", 1)}
+    d.timeslots = {"mon-1": Timeslot("mon-1", "2026-07-27", 1),
+                   "mon-2": Timeslot("mon-2", "2026-07-27", 2)}
+    d.teacher_subjects = {("t1", "math")}
+    d.teacher_availability = {("t1", "mon-1"), ("t1", "mon-2")}
+    d.student_availability = {("s1", "mon-1"), ("s1", "mon-2"),
+                              ("s2", "mon-1")}
+    d.student_needs = {("s1", "math"): 1, ("s2", "math"): 1}
+    r = solve(d)
+    assert r.complete
+    assert r.nodes_explored > 0            # the search actually ran
+    assert_solution_valid(d, r)
+    placed = {(l.student_id, l.timeslot_id) for l in r.lessons}
+    assert ("s2", "mon-1") in placed
+    assert ("s1", "mon-2") in placed
+
+
 def test_solve_prefers_one_lesson_per_day():
     """Two sessions, two days available: the solver uses both days rather
     than stacking a two-lesson day."""
