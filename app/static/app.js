@@ -688,6 +688,29 @@ async function renderSchedule(root) {
     } else renderObjList();
   }
 
+  // Drop-position preview: a line on the exact edge where the dragged
+  // card will be inserted (never a whole-area highlight).
+  function clearDropMarks() {
+    for (const n of ctrl.querySelectorAll(
+      ".drop-before, .drop-after, .drop-line")) {
+      n.classList.remove("drop-before", "drop-after", "drop-line");
+    }
+  }
+  function markEdge(node, after) {
+    clearDropMarks();
+    if (node) node.classList.add(after ? "drop-after" : "drop-before");
+  }
+  function markListStart(ul) {          // insertion at the top of a list
+    const first = ul.querySelector(".prio-item");
+    if (first) markEdge(first, false);
+    else { clearDropMarks(); ul.classList.add("drop-line"); }
+  }
+  function markListEnd(ul) {            // insertion at the bottom
+    const items = ul.querySelectorAll(".prio-item");
+    if (items.length) markEdge(items[items.length - 1], true);
+    else { clearDropMarks(); ul.classList.add("drop-line"); }
+  }
+
   function makeCard(key, rank) {
     const hard = rank === 0;
     const li = el(hard
@@ -705,13 +728,20 @@ async function renderSchedule(root) {
       e.dataTransfer.setData("text/plain", key);
       li.classList.add("dragging");
     };
-    li.ondragend = () => li.classList.remove("dragging");
-    li.ondragover = (e) => { e.preventDefault(); li.classList.add("drag-over"); };
-    li.ondragleave = () => li.classList.remove("drag-over");
+    li.ondragend = () => {
+      li.classList.remove("dragging");
+      clearDropMarks();
+    };
+    li.ondragover = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const rect = li.getBoundingClientRect();
+      markEdge(li, e.clientY > rect.top + rect.height / 2);
+    };
     li.ondrop = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      li.classList.remove("drag-over");
+      clearDropMarks();
       const moved = dragKey || e.dataTransfer.getData("text/plain");
       dragKey = null;
       if (!moved || moved === key) return;
@@ -748,23 +778,29 @@ async function renderSchedule(root) {
   const hardZone = $("#hard-zone", ctrl);
   const divider = $("#obj-divider", ctrl);
   const prioUl = $("#prio-list", ctrl);
-  function zoneDrop(target, opts) {
+  const hardUl = $("#hard-objs", ctrl);
+  function zoneDrop(target, opts, showEdge) {
     target.ondragover = (e) => {
-      if (dragKey) { e.preventDefault(); target.classList.add("drag-over"); }
+      if (!dragKey || e.target.closest(".prio-item")) return;
+      e.preventDefault();
+      showEdge();
     };
-    target.ondragleave = () => target.classList.remove("drag-over");
     target.ondrop = (e) => {
       if (e.target.closest(".prio-item")) return;   // handled by the card
       e.preventDefault();
-      target.classList.remove("drag-over");
+      clearDropMarks();
       const moved = dragKey || e.dataTransfer.getData("text/plain");
       dragKey = null;
       if (moved) settle(moved, opts);
     };
   }
-  zoneDrop(hardZone, { hard: true });                // above -> priority 0
-  zoneDrop(divider, { hard: false, atStart: true }); // divider -> priority 1
-  zoneDrop(prioUl, { hard: false });                 // bottom -> last
+  // above -> priority 0 (inserted first among the rank-0 cards)
+  zoneDrop(hardZone, { hard: true }, () => markListStart(hardUl));
+  // onto the divider -> first priority
+  zoneDrop(divider, { hard: false, atStart: true },
+           () => markListStart(prioUl));
+  // empty space below -> last priority
+  zoneDrop(prioUl, { hard: false }, () => markListEnd(prioUl));
 
   $("#gen", ctrl).onclick = async () => {
     const btn = $("#gen", ctrl);
