@@ -82,9 +82,8 @@ def main():
         teacher_subjects += [(tid, su) for su in sorted(picks)]
 
     # ---- availability: contiguous period bands on a weekday pattern.
-    # Needs average 12 sessions per subject (~24 per student), and a
-    # student fits at most 2 lessons per day — so availability must be
-    # generous: wide bands and most weekdays.
+    # Needs average 12 sessions per student in total; keep availability
+    # generous anyway so the solver has room to optimize.
     def band(min_width):
         lo = rng.choice([1, 1, 2])
         hi = rng.choice([4, 5, 5])
@@ -110,16 +109,18 @@ def main():
                 student_avail.append((stid, sid))
         student_days[stid] = sum(1 for d in days if d.weekday() in wdays)
 
-    # ---- needs: 2 subjects per student, ~12 sessions each (avg 12),
-    # clamped so the student's 2-per-day capacity is never exceeded
+    # ---- needs: 2 subjects per student, ~12 sessions IN TOTAL per
+    # student (average across all their subjects combined), split
+    # unevenly between the two subjects, and clamped so the student's
+    # 2-per-day capacity is never exceeded
     needs = []
     for stid, _ in students:
         capacity = 2 * student_days[stid]
-        budget = capacity - 2                    # leave breathing room
-        for su in rng.sample(subj_ids, 2):
-            n = min(rng.choice([11, 12, 12, 13, 14]), max(2, budget // 2))
+        total = min(rng.choice([10, 11, 12, 12, 13, 14]), capacity - 2)
+        first = max(2, min(total - 2, total // 2 + rng.choice([-1, 0, 0, 1])))
+        split = [first, total - first]
+        for su, n in zip(rng.sample(subj_ids, 2), split):
             needs.append((stid, su, n))
-            budget -= n
 
     write("students.csv", "id,name", students)
     write("teachers.csv", "id,name", teachers)

@@ -2,8 +2,8 @@
 
 The sample is deliberately large (a stress-test term): ~60 students,
 10 teachers, 2026-08-01..2026-08-27 minus Sundays × 5 periods, one
-30-seat hall, ~12 sessions per subject per student (~1300 lessons).
-Regenerate it with scripts/generate_sample_data.py.
+30-seat hall, ~12 sessions per student in total across their subjects
+(~700 lessons). Regenerate it with scripts/generate_sample_data.py.
 """
 from pathlib import Path
 
@@ -30,8 +30,8 @@ def test_sample_data_imports_and_solves(tmp_path):
     finally:
         conn.close()
 
-    # ~12 sessions per (student, subject) on average, as specified
-    mean = sum(data.student_needs.values()) / len(data.student_needs)
+    # ~12 sessions per STUDENT in total (all subjects), as specified
+    mean = sum(data.student_needs.values()) / len(data.students)
     assert 11 <= mean <= 13, mean
 
     assert check_input_problems(data) == []
