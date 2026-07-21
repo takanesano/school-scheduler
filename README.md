@@ -81,23 +81,22 @@ works toward it first and the Status panel reports a violation if it
 cannot be met. Drag the card back below the divider to make it a soft
 priority again.
 
-An optional **exact optimizer** (the "exact optimizer (CP-SAT)" checkbox
-in the Generate panel's Solver group) models the whole problem as a
-constraint program with OR-tools CP-SAT and optimizes every objective at
-once. It keeps searching for its whole **search budget** (configurable,
-default ~8 s), so generation takes roughly that long — but the result is
-usually strictly better; on the sample term it needs several fewer
-teacher working days than the standard solver. It automatically falls
-back to the standard solver when it cannot do better (its output is
-always re-checked by the same validator). Requires the optional
-`ortools` dependency.
+Two solvers, one explicit trade-off (chosen in the Generate panel):
 
-The solver uses backtracking search, so it finds a complete schedule
-whenever one exists (within a node budget). If the inputs make a complete
-schedule impossible, it stores the best partial schedule and tells you
-exactly which needs could not be placed and why (e.g. "no teacher can teach
-English", "only 1 timeslot works for both the student and a capable
-teacher").
+- **Standard** — fast and approximate, by design. A greedy pass places
+  everything in well under a second on typical data; only when it gets
+  stuck does a complete backtracking search take over, so a full
+  schedule is still found whenever one exists (within a node budget).
+  If the inputs make a complete schedule impossible, you get the best
+  partial schedule plus exactly which needs could not be placed and why.
+- **Exact (CP-SAT)** — models the whole problem as a constraint program
+  with OR-tools and optimizes every priority at once. It keeps searching
+  for its whole **search budget** (configurable, default ~8 s), so
+  generation takes roughly that long — but the result is usually
+  strictly better; on the sample term it needs several fewer teacher
+  working days. It automatically falls back to the standard solver when
+  it cannot do better (its output is always re-checked by the same
+  validator). Requires the optional `ortools` dependency.
 
 ## Using the web interface
 

@@ -33,6 +33,15 @@ weeks and marks non-term days `in_term: false`.
   tests for each side.
 - The solver is deterministic (sorted iteration everywhere). Tests rely on
   this; don't introduce hash-order or randomness.
+- v1's IDENTITY is "fast, approximate": solve() is GREEDY-FIRST
+  (nodes_explored == 0 on the fast path) and only falls back to the
+  exhaustive MRV backtracking search when greedy leaves needs unplaced —
+  never make v1 slow again in the name of quality; quality is v2's job
+  (CP-SAT). The greedy ordering (least-loaded teacher, free-day-first)
+  also happens to balance better than the search's constrainedness
+  order. MRV itself scores unique (student, subject) pairs with
+  early-exit counting; the recursion limit is raised per instance;
+  optimize_teacher_days skips >400 movable lessons.
 - H5 is teacher CAPACITY (default 2): a teacher may teach two students at
   once, different subjects allowed — code `teacher_over_capacity`, not
   double-booked. `teacher_capacity` is a parameter on validate/solve.

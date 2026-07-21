@@ -342,7 +342,16 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
           teacher_capacity: int = 2,
           student_day_cap: int = 2, require_consecutive: bool = True,
           max_nodes: int = 500_000) -> SolveResult:
-    """Backtracking search with MRV (most-constrained-first) ordering.
+    """Greedy-first placement with exhaustive backtracking as fallback.
+
+    v1 is the FAST, approximate solver (v2/CP-SAT is the slow exact one),
+    so a cheap greedy pass runs first: it completes almost instantly on
+    well-resourced instances — and its least-loaded-teacher / free-day
+    ordering tends to give BETTER-balanced schedules than the exhaustive
+    search's constrainedness-first order. Only when greedy leaves needs
+    unplaced does the full backtracking search with MRV run; it is
+    complete within the node budget, so tight instances still get a
+    schedule whenever one exists.
 
     ``fixed_lessons`` are kept as-is and count toward needs; the solver
     schedules only the remainder.  Deterministic: identical input yields an
@@ -403,6 +412,33 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
     nodes = 0
     exhausted = False
 
+    def greedy_fill() -> Counter:
+        """Place every requirement at its first candidate; returns the
+        count of requirements that found no spot. Mutates state/placed."""
+        missing: Counter = Counter()
+        for (st, su) in requirements:
+            opts = candidates(st, su)      # full scan: keep the free-day
+            if opts:                       # / balance preference ordering
+                s, t, r = opts[0]
+                l = Lesson(st, su, t, r, s)
+                state.place(l)
+                placed.append(l)
+            else:
+                missing[(st, su)] += 1
+        return missing
+
+    def unwind() -> None:
+        for l in placed:
+            state.remove(l)
+        placed.clear()
+
+    # ---- fast path: pure greedy (sub-second even on huge terms)
+    greedy_missing = greedy_fill()
+    if not greedy_missing and not unschedulable:
+        return SolveResult(fixed + placed, [], complete=True,
+                           nodes_explored=0)
+    unwind()
+
     # the search recurses once per requirement; large terms exceed
     # Python's default 1000-frame limit
     import sys
@@ -460,21 +496,11 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
         sys.setrecursionlimit(_old_limit)
 
     if not complete:
-        # Fall back to a deterministic greedy fill so the user still gets the
-        # best partial schedule plus an explicit list of what's missing.
-        for l in placed:
-            state.remove(l)
-        placed.clear()
-        missing: Counter = Counter()
-        for (st, su) in requirements:
-            opts = candidates(st, su)
-            if opts:
-                s, t, r = opts[0]
-                l = Lesson(st, su, t, r, s)
-                state.place(l)
-                placed.append(l)
-            else:
-                missing[(st, su)] += 1
+        # The exhaustive search failed too: return the deterministic
+        # greedy fill as the best partial schedule, plus an explicit list
+        # of what is missing.
+        unwind()
+        missing = greedy_fill()
         unsched = unschedulable + [
             (st, su, n) for (st, su), n in sorted(missing.items())]
         return SolveResult(fixed + placed, unsched,
