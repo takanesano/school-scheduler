@@ -12,6 +12,7 @@ const OBJ_LABELS = {
 const state = { tab: "schedule", keep: false, caution: true,
                 compress: true, exact: false, exactBudget: 8,
                 objOrder: Object.keys(OBJ_LABELS),
+                hiddenTeachers: new Set(), hiddenStudents: new Set(),
                 calView: "overview", calPerson: null };
 
 const TABS = [
@@ -944,11 +945,80 @@ async function renderSchedule(root) {
   // calendar of all lessons: delete buttons, violation highlighting, and
   // drag-and-drop between timeslots
   const badIds = new Set(schedule.violations.flatMap(v => v.lesson_ids));
+  const totalLessons = schedule.lessons.length;
   const grid = el(`<div class="panel"><h2>Timetable
-    <span class="muted">(${schedule.lessons.length} lessons)</span></h2>
+    <span class="muted" id="lesson-count">(${totalLessons} lessons)</span></h2>
     <p class="muted">Drag a lesson card onto another timeslot to move it.
       Moves that break a constraint are rejected with an explanation;
       confirm to override.</p></div>`);
+
+  // ---- visibility filter: toggle teachers / students on and off
+  const filterActive = state.hiddenTeachers.size || state.hiddenStudents.size;
+  const filterBox = el(`<details class="filter-box"${filterActive ? " open" : ""}>
+    <summary>Filter <span class="muted" id="filter-note"></span></summary>
+    <div class="filter-groups"></div></details>`);
+  const groupsEl = $(".filter-groups", filterBox);
+
+  function applyFilter() {
+    const ht = state.hiddenTeachers, hs = state.hiddenStudents;
+    let shown = 0;
+    for (const box of grid.querySelectorAll(".cal-entry[data-teacher-id]")) {
+      let any = false;
+      for (const card of box.querySelectorAll(".lesson-card")) {
+        const hide = ht.has(box.dataset.teacherId)
+          || hs.has(card.dataset.studentId);
+        card.classList.toggle("filter-hidden", hide);
+        if (!hide) { any = true; shown++; }
+      }
+      box.classList.toggle("filter-hidden", !any);
+    }
+    const active = ht.size || hs.size;
+    $("#lesson-count", grid).textContent = active
+      ? `(showing ${shown} of ${totalLessons} lessons)`
+      : `(${totalLessons} lessons)`;
+    $("#filter-note", filterBox).textContent = active
+      ? "— some lessons are hidden" : "";
+  }
+
+  function chipGroup(label, people, hiddenSet) {
+    const row = el(`<div class="filter-row"><span class="filter-label">
+      ${label}</span><span class="filter-chips"></span>
+      <span class="filter-quick">
+        <button class="small" data-q="all">all</button>
+        <button class="small" data-q="none">none</button></span></div>`);
+    const chipsEl = $(".filter-chips", row);
+    const chips = [];
+    for (const p of people) {
+      const chip = el(`<button class="chip${hiddenSet.has(p.id) ? " off" : ""}"
+        title="click to show/hide">${esc(p.name)}</button>`);
+      chip.onclick = () => {
+        if (hiddenSet.has(p.id)) hiddenSet.delete(p.id);
+        else hiddenSet.add(p.id);
+        chip.classList.toggle("off", hiddenSet.has(p.id));
+        applyFilter();
+      };
+      chips.push([p.id, chip]);
+      chipsEl.append(chip);
+    }
+    row.querySelector("[data-q='all']").onclick = () => {
+      for (const [id, chip] of chips) {
+        hiddenSet.delete(id);
+        chip.classList.remove("off");
+      }
+      applyFilter();
+    };
+    row.querySelector("[data-q='none']").onclick = () => {
+      for (const [id, chip] of chips) {
+        hiddenSet.add(id);
+        chip.classList.add("off");
+      }
+      applyFilter();
+    };
+    return row;
+  }
+  groupsEl.append(chipGroup("Teachers", teachers, state.hiddenTeachers));
+  groupsEl.append(chipGroup("Students", students, state.hiddenStudents));
+  grid.append(filterBox);
 
   // Shared caution flow for any lesson change (drag-move or inline edit).
   async function patchLesson(lessonId, fields, verb) {
@@ -1065,11 +1135,12 @@ async function renderSchedule(root) {
     }
 
     grid.append(calendarTable(overview, (entry) => {
-      const box = el(`<div class="cal-entry">
+      const box = el(`<div class="cal-entry" data-teacher-id="${entry.teacher_id}">
         <b>${esc(entry.teacher_name)}</b></div>`);
       for (const l of entry.lessons) {
         const card = el(`<div class="lesson-card${badIds.has(l.lesson_id) ? " bad" : ""}"
-          draggable="true" data-lesson-id="${l.lesson_id}">
+          draggable="true" data-lesson-id="${l.lesson_id}"
+          data-student-id="${l.student_id}">
           ${esc(l.student_name)} — ${esc(l.subject_name)}
           <span class="muted">· ${esc(l.room_name)}</span>
           <button class="edit" title="edit teacher / room / subject">✎</button>
@@ -1088,6 +1159,7 @@ async function renderSchedule(root) {
       }
       return box;
     }, dropHook));
+    applyFilter();
   }
 
   // panel order: work area first (manual add + timetable), then the
