@@ -152,7 +152,12 @@ student also removes their availability, needs, and lessons).
 | `student_availability.csv` | `student_id,timeslot_id` |
 
 See [sample_data/](sample_data/) for a complete working example — a
-two-week summer term (2026-07-27 … 2026-08-08, no Sundays).
+deliberately large stress-test term: **60 students, 10 teachers,
+2026-08-01 … 2026-08-27** (Sundays off) with 5 periods per day, a single
+30-seat hall, and ~12 sessions per subject per student (~1,400 lessons).
+Generating it takes ~20 s with the standard solver. Regenerate or
+customize it with [scripts/generate_sample_data.py](scripts/generate_sample_data.py)
+(deterministic; edit the constants at the top).
 
 ## Tests
 

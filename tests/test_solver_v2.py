@@ -1,13 +1,9 @@
 """Tests for solver v2 (CP-SAT). Skipped gracefully if ortools is absent
 except for the parts that must work without it."""
-from pathlib import Path
-
 import pytest
 
-from app import db
-from app.load_sample import load_directory
-from app.main import load_dataset
-from app.scheduler import Lesson, Room, coverage_report, validate
+from app.scheduler import (Dataset, Lesson, Room, Timeslot, coverage_report,
+                           validate)
 from app.solver_v2 import (ObjectiveWeights, SolverConfig, objective_terms,
                            resolve_minimal_disruption, solve_v2,
                            weighted_cost)
@@ -15,21 +11,42 @@ from tests.test_scheduler import make_data
 
 ortools = pytest.importorskip("ortools", reason="ortools not installed")
 
-SAMPLE_DIR = Path(__file__).resolve().parent.parent / "sample_data"
-
 # small reproducible CP budget so the suite stays fast; solve_v2's cost
 # gate guarantees quality never drops below the v1 pipeline
 FAST = SolverConfig(deterministic_time=3.0)
 
 
-def sample_dataset(tmp_path):
-    db_path = tmp_path / "s.db"
-    load_directory(SAMPLE_DIR, db_path)
-    conn = db.connect(db_path)
-    try:
-        return load_dataset(conn)
-    finally:
-        conn.close()
+def medium_dataset() -> Dataset:
+    """A two-week term the size of the ORIGINAL sample data (the shipped
+    sample is now a 1300-lesson stress test — far too big for these
+    focused solver-behavior tests)."""
+    d = Dataset()
+    d.students = {f"s{i}": f"Student{i}" for i in range(1, 6)}
+    d.teachers = {"t1": "T1", "t2": "T2", "t3": "T3"}
+    d.subjects = {"math": "Math", "eng": "English", "sci": "Science"}
+    d.rooms = {"hall": Room("hall", "Hall", 4)}
+    import datetime as dt
+    day = dt.date(2026, 8, 3)                      # a Monday
+    while day <= dt.date(2026, 8, 14):
+        if day.weekday() < 5:                      # Mon-Fri x 2 weeks
+            for p in (1, 2, 3):
+                sid = f"{day:%m%d}-{p}"
+                d.timeslots[sid] = Timeslot(sid, day.isoformat(), p)
+        day += dt.timedelta(days=1)
+    d.teacher_subjects = {("t1", "math"), ("t1", "sci"),
+                          ("t2", "eng"), ("t2", "math"),
+                          ("t3", "sci"), ("t3", "eng")}
+    for t in d.teachers:
+        for s in d.timeslots:
+            d.teacher_availability.add((t, s))
+    for st in d.students:
+        for s in d.timeslots:
+            d.student_availability.add((st, s))
+    subj = ["math", "eng", "sci"]
+    for i, st in enumerate(sorted(d.students)):
+        d.student_needs[(st, subj[i % 3])] = 3
+        d.student_needs[(st, subj[(i + 1) % 3])] = 3
+    return d
 
 
 def assert_clean(d, r, cap=2):
@@ -97,8 +114,8 @@ def test_cpsat_solves_and_wins_on_small_instance():
         weighted_cost(d, v1.lessons, cfg)
 
 
-def test_cpsat_on_sample_term_beats_or_matches_v1(tmp_path):
-    d = sample_dataset(tmp_path)
+def test_cpsat_on_medium_term_beats_or_matches_v1():
+    d = medium_dataset()
     cfg = FAST
     r = solve_v2(d, config=cfg)
     assert r.backend == "cpsat"
@@ -112,8 +129,8 @@ def test_cpsat_on_sample_term_beats_or_matches_v1(tmp_path):
     assert objective_terms(d, r.lessons)["student_double_day"] == 0
 
 
-def test_cpsat_is_deterministic(tmp_path):
-    d = sample_dataset(tmp_path)
+def test_cpsat_is_deterministic():
+    d = medium_dataset()
     assert solve_v2(d, config=FAST).lessons == \
         solve_v2(d, config=FAST).lessons
 
@@ -266,8 +283,8 @@ def test_cpsat_higher_day_cap_contiguous_triple():
 
 # ------------------------------------------- minimal-disruption rescheduling
 
-def test_resolve_keeps_schedule_when_still_valid(tmp_path):
-    d = sample_dataset(tmp_path)
+def test_resolve_keeps_schedule_when_still_valid():
+    d = medium_dataset()
     current = solve_v2(d, config=FAST).lessons
     r = resolve_minimal_disruption(d, current, config=FAST)
     assert r.backend == "cpsat"
@@ -293,8 +310,8 @@ def test_resolve_repairs_with_exactly_one_change():
     assert current[1] in r.lessons
 
 
-def test_resolve_repairs_sample_term_with_few_changes(tmp_path):
-    d = sample_dataset(tmp_path)
+def test_resolve_repairs_sample_term_with_few_changes():
+    d = medium_dataset()
     current = solve_v2(d, config=FAST).lessons
     # a teacher calls in sick for one of their timeslots
     hit = current[0]
