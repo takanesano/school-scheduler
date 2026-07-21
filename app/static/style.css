@@ -163,6 +163,25 @@ button.small {
 .hard-bound input { width: 3.4rem; padding: 0.1rem 0.3rem; }
 .prio-item.hard-obj .prio-grip { margin-left: 0.4rem; }
 #exact-opts { margin: 0.2rem 0 0 1.4rem; }
+.filter-box { margin: 0.3rem 0 0.6rem; }
+.filter-box summary { cursor: pointer; font-size: 0.85rem; font-weight: 600;
+                      color: var(--muted); user-select: none; }
+.filter-row { display: flex; gap: 0.5rem; align-items: flex-start;
+              margin: 0.4rem 0; }
+.filter-label { font-size: 0.8rem; font-weight: 600; min-width: 4.5rem;
+                padding-top: 0.2rem; }
+.filter-chips { display: flex; flex-wrap: wrap; gap: 0.25rem; flex: 1; }
+.chip { border: 1px solid var(--accent); background: #eef3fe;
+        color: var(--text); border-radius: 999px; cursor: pointer;
+        padding: 0.1rem 0.6rem; font-size: 0.78rem; }
+.chip.off { border-color: var(--border); background: var(--bg);
+            color: var(--muted); text-decoration: line-through; }
+.filter-quick { display: flex; gap: 0.25rem; padding-top: 0.1rem; }
+.filter-hidden { display: none !important; }
+@media (prefers-color-scheme: dark) {
+  .chip { background: #223046; }
+  .chip.off { background: var(--bg); }
+}
 .workload { margin-top: 0.7rem; }
 .workload-tables { display: flex; gap: 1.2rem; flex-wrap: wrap;
                    align-items: flex-start; }
