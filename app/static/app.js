@@ -820,8 +820,38 @@ async function renderSchedule(root) {
     }
     state.exactBudget = budget || state.exactBudget;
     btn.disabled = true;
-    btn.textContent = state.exact
-      ? `Solving… (~${state.exactBudget}s)` : "Solving…";
+    btn.textContent = "Solving…";
+
+    // live progress: a countdown bar for the exact solver (its search
+    // budget is known), an elapsed indicator for the standard one
+    const known = state.exact ? state.exactBudget : null;
+    const prog = el(`<div class="gen-progress${known ? "" : " indeterminate"}">
+      <div class="gen-progress-track"><div class="gen-progress-bar"></div></div>
+      <div class="gen-progress-label">Solving…</div></div>`);
+    $("#gen-result", ctrl).replaceChildren(prog);
+    const barEl = $(".gen-progress-bar", prog);
+    const labEl = $(".gen-progress-label", prog);
+    const t0 = Date.now();
+    const tick = () => {
+      const elapsed = (Date.now() - t0) / 1000;
+      if (known) {
+        const remain = known - elapsed;
+        if (remain > 0) {
+          barEl.style.width = `${Math.min(100, elapsed / known * 100)}%`;
+          labEl.textContent =
+            `Solving… about ${Math.ceil(remain)} s remaining`;
+        } else {
+          barEl.style.width = "100%";
+          prog.classList.add("overtime");
+          labEl.textContent = "Solving… finishing up";
+        }
+      } else if (elapsed >= 1.5) {
+        labEl.textContent = `Solving… ${Math.floor(elapsed)} s elapsed`;
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 250);
+
     try {
       const res = await api("POST", "/api/schedule/generate", {
         keep_existing: state.keep,
@@ -835,7 +865,14 @@ async function renderSchedule(root) {
           + (state.exact ? ` (${res.backend})` : ""));
       } else toast("Partial schedule — see unscheduled list", true);
       render();
-    } catch (e) { toast(e.message, true); btn.disabled = false; btn.textContent = "Generate schedule"; }
+    } catch (e) {
+      toast(e.message, true);
+      btn.disabled = false;
+      btn.textContent = "Generate schedule";
+      prog.remove();
+    } finally {
+      clearInterval(timer);
+    }
   };
   $("#opt-keep", ctrl).onchange = (e) => { state.keep = e.target.checked; };
   $("#opt-compress", ctrl).onchange = (e) => { state.compress = e.target.checked; };
