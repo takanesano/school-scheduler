@@ -925,14 +925,19 @@ async function renderSchedule(root) {
       <table><thead><tr><th>Teacher</th><th>Lessons</th>
         <th>Working days</th></tr></thead><tbody>${
         schedule.teacher_stats.map(t =>
-          `<tr><td>${esc(t.name)}</td><td>${t.lessons}</td>
+          `<tr><td><button class="person-link" data-kind="teacher"
+             data-pid="${esc(t.teacher_id)}" title="show in the timetable
+             filter">${esc(t.name)}</button></td><td>${t.lessons}</td>
            <td>${t.days}</td></tr>`).join("")
       }</tbody></table>
       <table><thead><tr><th>Student</th><th>Lessons</th>
         <th>Lesson days</th><th>Two-lesson days</th></tr></thead><tbody>${
         schedule.student_stats.map(s =>
           `<tr${s.double_days.length ? ' class="double-day"' : ""}>
-           <td>${esc(s.name)}</td><td>${s.lessons}</td><td>${s.days}</td>
+           <td><button class="person-link" data-kind="student"
+             data-pid="${esc(s.student_id)}" title="show in the timetable
+             filter">${esc(s.name)}</button></td>
+           <td>${s.lessons}</td><td>${s.days}</td>
            <td>${s.double_days.length
               ? `${s.double_days.length} (${s.double_days.map(fmtDate).join(", ")})`
               : "—"}</td></tr>`).join("")
@@ -1069,6 +1074,7 @@ async function renderSchedule(root) {
       const countTag = state.filterSort === "lessons"
         ? ` <span class="chip-count">${n}</span>` : "";
       const chip = el(`<button class="chip${hiddenSet.has(p.id) ? " off" : ""}"
+        data-kind="${kind}" data-pid="${esc(p.id)}"
         title="${n} lesson(s) — click to show/hide">${esc(p.name)}${countTag}</button>`);
       chip.onclick = () => {
         if (hiddenSet.has(p.id)) hiddenSet.delete(p.id);
@@ -1248,6 +1254,24 @@ async function renderSchedule(root) {
       return box;
     }, dropHook));
     applyFilter();
+  }
+
+  // names in the Status workload tables jump to (and flash) the
+  // person's chip in the timetable filter
+  for (const link of status.querySelectorAll(".person-link")) {
+    link.onclick = () => {
+      filterBox.open = true;
+      const chip = filterBox.querySelector(
+        `.chip[data-kind="${link.dataset.kind}"]`
+        + `[data-pid="${CSS.escape(link.dataset.pid)}"]`);
+      if (!chip) return;
+      chip.scrollIntoView({ behavior: "smooth", block: "center" });
+      chip.focus({ preventScroll: true });
+      chip.classList.remove("chip-flash");
+      void chip.offsetWidth;             // restart the animation
+      chip.classList.add("chip-flash");
+      setTimeout(() => chip.classList.remove("chip-flash"), 2500);
+    };
   }
 
   // panel order: work area first (manual add + timetable), then the

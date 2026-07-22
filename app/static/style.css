@@ -202,6 +202,14 @@ button.small {
 .chip-count { background: var(--accent); color: #fff; border-radius: 999px;
               font-size: 0.68rem; padding: 0 0.35rem; margin-left: 0.15rem; }
 .chip.off .chip-count { background: var(--muted); }
+.person-link { border: none; background: none; padding: 0; cursor: pointer;
+               color: var(--accent); font-size: inherit; font-family: inherit;
+               text-align: left; }
+.person-link:hover { text-decoration: underline; }
+.chip-flash { animation: chip-flash 0.8s ease-in-out 3; }
+@keyframes chip-flash {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 4px var(--accent); } }
 .filter-hidden { display: none !important; }
 @media (prefers-color-scheme: dark) {
   .chip { background: #223046; }
