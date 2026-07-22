@@ -1267,10 +1267,11 @@ async function renderSchedule(root) {
       if (!chip) return;
       chip.scrollIntoView({ behavior: "smooth", block: "center" });
       chip.focus({ preventScroll: true });
-      chip.classList.remove("chip-flash");
-      void chip.offsetWidth;             // restart the animation
-      chip.classList.add("chip-flash");
-      setTimeout(() => chip.classList.remove("chip-flash"), 2500);
+      // native-looking focus ring (same as keyboard Tab), kept until
+      // the chip loses focus
+      chip.classList.add("chip-target");
+      chip.addEventListener("blur",
+        () => chip.classList.remove("chip-target"), { once: true });
     };
   }
 

@@ -206,10 +206,12 @@ button.small {
                color: var(--accent); font-size: inherit; font-family: inherit;
                text-align: left; }
 .person-link:hover { text-decoration: underline; }
-.chip-flash { animation: chip-flash 0.8s ease-in-out 3; }
-@keyframes chip-flash {
-  0%, 100% { box-shadow: 0 0 0 0 transparent; }
-  50% { box-shadow: 0 0 0 4px var(--accent); } }
+/* the same ring the browser draws for keyboard (Tab) focus */
+.chip.chip-target {
+  outline: 2px auto Highlight;
+  outline: 5px auto -webkit-focus-ring-color;
+  outline-offset: 2px;
+}
 .filter-hidden { display: none !important; }
 @media (prefers-color-scheme: dark) {
   .chip { background: #223046; }
