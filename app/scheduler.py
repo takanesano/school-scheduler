@@ -568,15 +568,27 @@ def student_double_days(data: Dataset, lessons: list[Lesson]) -> int:
 # it at 0 — demoting it makes it an ordinary soft preference.
 OBJECTIVE_TERMS = ("student_double_day", "student_day_gap",
                    "teacher_slot_spread", "teacher_working_day",
-                   "teacher_day_spread")
+                   "teacher_single_day", "teacher_day_spread")
 
 OBJECTIVE_LABELS = {
     "student_double_day": "Student days with two or more lessons",
     "student_day_gap": "Student days with non-consecutive lessons",
     "teacher_slot_spread": "Lesson-count spread between teachers",
     "teacher_working_day": "Total teacher working days",
+    "teacher_single_day": "Teacher days with only one lesson",
     "teacher_day_spread": "Working-day spread between teachers",
 }
+
+
+def teacher_single_days(data: Dataset, lessons: list[Lesson]) -> int:
+    """Number of (teacher, day) pairs with EXACTLY one lesson — coming in
+    for a single class is wasteful for the teacher."""
+    per_day: Counter = Counter()
+    for l in lessons:
+        slot = data.timeslots.get(l.timeslot_id)
+        if slot is not None:
+            per_day[(l.teacher_id, slot.date)] += 1
+    return sum(1 for n in per_day.values() if n == 1)
 
 
 def student_gap_days(data: Dataset, lessons: list[Lesson]) -> int:
@@ -605,6 +617,7 @@ def objective_term_values(data: Dataset,
             (max(slot_counts) - min(slot_counts)) if slot_counts else 0,
         "teacher_working_day":
             sum(len(s["days"]) for s in stats.values()),
+        "teacher_single_day": teacher_single_days(data, lessons),
         "teacher_day_spread":
             (max(day_counts) - min(day_counts)) if day_counts else 0,
     }

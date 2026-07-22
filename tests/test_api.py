@@ -276,7 +276,8 @@ def test_schedule_reports_teacher_stats(client):
         {"teacher_id": "t1", "name": "Tanaka", "lessons": 2, "days": 2}]
     assert body["objective"] == {"student_double_days": 0,
                                  "student_day_gaps": 0, "slot_spread": 0,
-                                 "total_days": 2, "day_spread": 0}
+                                 "total_days": 2, "teacher_single_days": 2,
+                                 "day_spread": 0}
     assert body["student_stats"] == [
         {"student_id": "s1", "name": "Aoi", "lessons": 1, "days": 1,
          "double_days": []},
@@ -377,8 +378,8 @@ def test_generate_honors_objective_order(client):
                     json={"student_id": st, "subject_id": "math",
                           "sessions": 1})
     days_first = ["student_double_day", "student_day_gap",
-                  "teacher_working_day", "teacher_slot_spread",
-                  "teacher_day_spread"]
+                  "teacher_working_day", "teacher_single_day",
+                  "teacher_slot_spread", "teacher_day_spread"]
     r = client.post("/api/schedule/generate",
                     json={"objective_order": days_first})
     assert r.json()["complete"] is True
@@ -507,6 +508,7 @@ ALWAYS_ACTIVE_CASES = [
     ("student_double_day", 1),
     ("teacher_slot_spread", 3),
     ("teacher_working_day", 2),
+    ("teacher_single_day", 1),
     ("teacher_day_spread", 2),
 ]
 
