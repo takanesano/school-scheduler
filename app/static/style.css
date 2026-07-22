@@ -126,6 +126,26 @@ button.small {
 .gen-group p { margin: 0.4rem 0 0; }
 .gen-warning { margin-top: 0.4rem; }
 .gen-actions { justify-content: flex-end; }
+.gen-progress { margin-top: 0.6rem; }
+.gen-progress-track { height: 0.55rem; border-radius: 999px;
+                      background: var(--bg); border: 1px solid var(--border);
+                      overflow: hidden; }
+.gen-progress-bar { height: 100%; width: 0; background: var(--accent);
+                    border-radius: 999px; transition: width 0.25s linear; }
+.gen-progress-label { font-size: 0.8rem; color: var(--muted);
+                      margin-top: 0.25rem; }
+.gen-progress.overtime .gen-progress-bar { animation: prog-pulse 1.2s
+                                           ease-in-out infinite; }
+.gen-progress.indeterminate .gen-progress-bar {
+  width: 30% !important;
+  animation: prog-slide 1.1s ease-in-out infinite; }
+@keyframes prog-slide {
+  0% { margin-left: 0; }
+  50% { margin-left: 70%; }
+  100% { margin-left: 0; } }
+@keyframes prog-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; } }
 .prio-item { display: flex; align-items: center; gap: 0.5rem;
              border: 1px solid var(--border); border-radius: 5px;
              background: var(--panel); padding: 0.3rem 0.55rem;
