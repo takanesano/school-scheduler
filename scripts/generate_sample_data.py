@@ -1,7 +1,10 @@
 """Regenerate sample_data/ — a large summer term.
 
-Deterministic (fixed seed): ~60 students, 10 teachers, 2026-08-01 to
-2026-08-27 with Sundays off and 5 periods per day, one 30-seat hall.
+Deterministic (fixed seed): 60 students, 10 teachers, 2026-07-21 to
+2026-08-31 with Sundays off and 5 periods per day, one 30-seat hall.
+Each student takes ~3 subjects with ~5 sessions each (avg ~15 sessions
+per student, ~900 lessons). All teachers teach Japanese / English /
+Social Studies; only five of them also teach Math and Science.
 
 Run from the project root:
     .venv/bin/python scripts/generate_sample_data.py
@@ -28,7 +31,7 @@ from app.load_sample import load_directory  # noqa: E402
 OUT = ROOT / "sample_data"
 rng = random.Random(20260801)
 
-START, END = dt.date(2026, 8, 1), dt.date(2026, 8, 27)
+START, END = dt.date(2026, 7, 21), dt.date(2026, 8, 31)
 PERIODS = {1: "09:00-10:10", 2: "10:20-11:30", 3: "11:40-12:50",
            4: "14:00-15:10", 5: "15:20-16:30"}
 WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -72,14 +75,15 @@ def main():
     teachers = [(f"t{i+1:02d}", f"{SURNAMES[i]}-sensei")
                 for i in range(N_TEACHERS)]
 
-    # ---- teacher subjects: 2-3 each, every subject covered by >=3
+    # ---- teacher subjects: everyone teaches Japanese / English /
+    # Social Studies; only the first five also teach Math and Science
     subj_ids = list(SUBJECTS)
     teacher_subjects = []
     for i, (tid, _) in enumerate(teachers):
-        picks = {subj_ids[i % 5], subj_ids[(i + 2) % 5]}
-        if i % 3 == 0:
-            picks.add(subj_ids[(i + 4) % 5])
-        teacher_subjects += [(tid, su) for su in sorted(picks)]
+        subs = ["jpn", "eng", "soc"]
+        if i < 5:
+            subs += ["math", "sci"]
+        teacher_subjects += [(tid, su) for su in sorted(subs)]
 
     # ---- availability: contiguous period bands on a weekday pattern.
     # Needs average 12 sessions per student in total; keep availability
@@ -109,18 +113,18 @@ def main():
                 student_avail.append((stid, sid))
         student_days[stid] = sum(1 for d in days if d.weekday() in wdays)
 
-    # ---- needs: 2 subjects per student, ~12 sessions IN TOTAL per
-    # student (average across all their subjects combined), split
-    # unevenly between the two subjects, and clamped so the student's
-    # 2-per-day capacity is never exceeded
+    # ---- needs: ~3 subjects per student (avg 3), ~5 sessions per
+    # subject (avg 5), clamped so the student's 2-per-day capacity is
+    # never exceeded
     needs = []
     for stid, _ in students:
-        capacity = 2 * student_days[stid]
-        total = min(rng.choice([10, 11, 12, 12, 13, 14]), capacity - 2)
-        first = max(2, min(total - 2, total // 2 + rng.choice([-1, 0, 0, 1])))
-        split = [first, total - first]
-        for su, n in zip(rng.sample(subj_ids, 2), split):
+        budget = 2 * student_days[stid] - 2      # leave breathing room
+        subjects_taken = rng.sample(subj_ids, rng.choice([2, 3, 3, 4]))
+        for i, su in enumerate(subjects_taken):
+            per_subject_cap = max(2, budget // (len(subjects_taken) - i))
+            n = min(rng.choice([4, 5, 5, 6]), per_subject_cap)
             needs.append((stid, su, n))
+            budget -= n
 
     write("students.csv", "id,name", students)
     write("teachers.csv", "id,name", teachers)
@@ -132,7 +136,10 @@ def main():
     write("student_needs.csv", "student_id,subject_id,sessions", needs)
     write("teacher_availability.csv", "teacher_id,timeslot_id", teacher_avail)
     write("student_availability.csv", "student_id,timeslot_id", student_avail)
-    print(f"total sessions: {sum(n for (_, _, n) in needs)}")
+    total = sum(n for (_, _, n) in needs)
+    print(f"total sessions: {total}")
+    print(f"subjects per student: {len(needs) / len(students):.2f}")
+    print(f"sessions per (student, subject): {total / len(needs):.2f}")
 
     # ---- sanity: no need may be structurally impossible
     import tempfile

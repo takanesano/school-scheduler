@@ -1,9 +1,11 @@
 """The shipped sample data must import cleanly and solve completely.
 
-The sample is deliberately large (a stress-test term): ~60 students,
-10 teachers, 2026-08-01..2026-08-27 minus Sundays × 5 periods, one
-30-seat hall, ~12 sessions per student in total across their subjects
-(~700 lessons). Regenerate it with scripts/generate_sample_data.py.
+The sample is a large generated term: 60 students, 10 teachers,
+2026-07-21..2026-08-31 minus Sundays × 5 periods (180 slots), one
+30-seat hall, ~3 subjects × ~5 sessions per student (~900 lessons).
+All teachers teach Japanese/English/Social Studies; only five also
+teach Math and Science. Regenerate with
+scripts/generate_sample_data.py.
 """
 from pathlib import Path
 
@@ -22,7 +24,9 @@ def test_sample_data_imports_and_solves(tmp_path):
     assert counts["students"] == 60
     assert counts["teachers"] == 10
     assert counts["rooms"] == 1
-    assert counts["timeslots"] == 115   # 23 days (Sundays off) x 5 periods
+    assert counts["timeslots"] == 180  # 36 days (Sundays off) x 5 periods
+    # 10 teachers x (jpn, eng, soc) + 5 teachers x (math, sci)
+    assert counts["teacher_subjects"] == 40
 
     conn = db.connect(db_path)
     try:
@@ -30,9 +34,20 @@ def test_sample_data_imports_and_solves(tmp_path):
     finally:
         conn.close()
 
-    # ~12 sessions per STUDENT in total (all subjects), as specified
-    mean = sum(data.student_needs.values()) / len(data.students)
-    assert 11 <= mean <= 13, mean
+    # only five teachers may teach math / science
+    math_sci = {t for (t, su) in data.teacher_subjects
+                if su in ("math", "sci")}
+    assert len(math_sci) == 5
+    core = {t for (t, su) in data.teacher_subjects
+            if su in ("jpn", "eng", "soc")}
+    assert len(core) == 10
+
+    # ~3 subjects per student, ~5 sessions per subject (as specified)
+    subj_per_student = len(data.student_needs) / len(data.students)
+    assert 2.6 <= subj_per_student <= 3.4, subj_per_student
+    sessions_per_pair = (sum(data.student_needs.values())
+                         / len(data.student_needs))
+    assert 4.5 <= sessions_per_pair <= 5.5, sessions_per_pair
 
     assert check_input_problems(data) == []
     result = solve(data)
@@ -40,3 +55,6 @@ def test_sample_data_imports_and_solves(tmp_path):
     assert len(result.lessons) == sum(data.student_needs.values())
     assert validate(data, result.lessons) == []
     assert coverage_report(data, result.lessons) == []
+    # scheduled math/sci lessons only ever use the five capable teachers
+    assert {l.teacher_id for l in result.lessons
+            if l.subject_id in ("math", "sci")} <= math_sci

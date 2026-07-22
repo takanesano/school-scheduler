@@ -152,10 +152,11 @@ student also removes their availability, needs, and lessons).
 
 See [sample_data/](sample_data/) for a complete working example — a
 deliberately large stress-test term: **60 students, 10 teachers,
-2026-08-01 … 2026-08-27** (Sundays off) with 5 periods per day, a single
-30-seat hall, and ~12 sessions in total per student across their
-subjects (~700 lessons). Generating takes ~10 s with the standard
-solver. Regenerate or
+2026-07-21 … 2026-08-31** (Sundays off) with 5 periods per day, a single
+30-seat hall, and ~3 subjects × ~5 sessions per student (~900 lessons).
+Every teacher covers Japanese / English / Social Studies; only five also
+teach Math and Science. The standard solver generates it in about a
+second. Regenerate or
 customize it with [scripts/generate_sample_data.py](scripts/generate_sample_data.py)
 (deterministic; edit the constants at the top).
 
