@@ -99,7 +99,8 @@ def validate(data: Dataset, lessons: list[Lesson],
              teacher_capacity: int = 2,
              student_day_cap: int = 2,
              require_consecutive: bool = True,
-             objective_caps: dict[str, int] | None = None
+             objective_caps: dict[str, int] | None = None,
+             single_day_max: int = 1
              ) -> list[Violation]:
     """Return every hard-constraint violation in the given schedule.
 
@@ -219,7 +220,8 @@ def validate(data: Dataset, lessons: list[Lesson],
     for term, bound in sorted((objective_caps or {}).items()):
         if term == "student_day_gap" and require_consecutive:
             continue
-        value = objective_term_values(data, known).get(term)
+        value = objective_term_values(
+            data, known, single_day_max=single_day_max).get(term)
         if value is not None and value > bound:
             bad("objective_cap_exceeded",
                 f"{OBJECTIVE_LABELS.get(term, term)} is {value} but must "
@@ -575,20 +577,23 @@ OBJECTIVE_LABELS = {
     "student_day_gap": "Student days with non-consecutive lessons",
     "teacher_slot_spread": "Lesson-count spread between teachers",
     "teacher_working_day": "Total teacher working days",
-    "teacher_single_day": "Teacher days with only one lesson",
+    "teacher_single_day": "Teacher days with too few lessons",
     "teacher_day_spread": "Working-day spread between teachers",
 }
 
 
-def teacher_single_days(data: Dataset, lessons: list[Lesson]) -> int:
-    """Number of (teacher, day) pairs with EXACTLY one lesson — coming in
-    for a single class is wasteful for the teacher."""
+def teacher_single_days(data: Dataset, lessons: list[Lesson],
+                        at_most: int = 1) -> int:
+    """Number of worked (teacher, day) pairs with AT MOST ``at_most``
+    lessons — coming in for so few classes is wasteful for the teacher.
+    The threshold is the user-configurable `single_day_max` setting
+    (default 1 = days with only one lesson)."""
     per_day: Counter = Counter()
     for l in lessons:
         slot = data.timeslots.get(l.timeslot_id)
         if slot is not None:
             per_day[(l.teacher_id, slot.date)] += 1
-    return sum(1 for n in per_day.values() if n == 1)
+    return sum(1 for n in per_day.values() if 1 <= n <= at_most)
 
 
 def student_gap_days(data: Dataset, lessons: list[Lesson]) -> int:
@@ -604,7 +609,8 @@ def student_gap_days(data: Dataset, lessons: list[Lesson]) -> int:
 
 
 def objective_term_values(data: Dataset,
-                          lessons: list[Lesson]) -> dict[str, int]:
+                          lessons: list[Lesson],
+                          single_day_max: int = 1) -> dict[str, int]:
     """Each soft-objective term evaluated on a concrete schedule."""
     stats = teacher_day_stats(data, lessons)
     elig = eligible_teachers(data)
@@ -617,15 +623,16 @@ def objective_term_values(data: Dataset,
             (max(slot_counts) - min(slot_counts)) if slot_counts else 0,
         "teacher_working_day":
             sum(len(s["days"]) for s in stats.values()),
-        "teacher_single_day": teacher_single_days(data, lessons),
+        "teacher_single_day":
+            teacher_single_days(data, lessons, at_most=single_day_max),
         "teacher_day_spread":
             (max(day_counts) - min(day_counts)) if day_counts else 0,
     }
 
 
 def schedule_objective(data: Dataset, lessons: list[Lesson],
-                       order: tuple[str, ...] | list[str] | None = None
-                       ) -> tuple[int, ...]:
+                       order: tuple[str, ...] | list[str] | None = None,
+                       single_day_max: int = 1) -> tuple[int, ...]:
     """The soft-objective terms as a tuple, compared lexicographically.
 
     ``order`` (a permutation of OBJECTIVE_TERMS) decides which term
@@ -633,7 +640,8 @@ def schedule_objective(data: Dataset, lessons: list[Lesson],
     day per student ≻ even teacher lesson counts ≻ few teacher working
     days ≻ even teacher day counts.
     """
-    values = objective_term_values(data, lessons)
+    values = objective_term_values(data, lessons,
+                                   single_day_max=single_day_max)
     return tuple(values[name] for name in (order or OBJECTIVE_TERMS))
 
 
@@ -643,7 +651,8 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
                           student_day_cap: int = 2,
                           require_consecutive: bool = True,
                           objective_order: list[str] | None = None,
-                          max_rounds: int = 200) -> list[Lesson]:
+                          max_rounds: int = 200,
+                          single_day_max: int = 1) -> list[Lesson]:
     """Deterministic local search improving ``schedule_objective``.
 
     Only ``movable`` lessons are changed; ``fixed`` ones (e.g. lessons the
@@ -682,7 +691,8 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
                             student_day_cap, require_consecutive)
 
     def obj(candidate: list[Lesson]) -> tuple[int, ...]:
-        return schedule_objective(data, fixed + candidate, objective_order)
+        return schedule_objective(data, fixed + candidate, objective_order,
+                                  single_day_max=single_day_max)
 
     if not ok(work):
         return fixed + work   # never touch an already-broken schedule

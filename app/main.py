@@ -341,12 +341,16 @@ def del_student_avail(student_id: str, timeslot_id: str, conn=Depends(get_conn))
 # "student_day_gap" capped at 0 by default = the consecutiveness rule is
 # always active out of the box; demote the card in the UI to relax it.
 DEFAULT_SETTINGS = {"teacher_capacity": 2, "student_day_cap": 2,
+                    "single_day_max": 1,
                     "objective_caps": {"student_day_gap": 0}}
 
 
 class SettingsIn(BaseModel):
     teacher_capacity: int = Field(default=2, ge=1, le=4)
     student_day_cap: int = Field(default=2, ge=1, le=4)
+    # the "teacher days with too few lessons" objective counts worked
+    # days with at most this many lessons (1 = single-lesson days)
+    single_day_max: int = Field(default=1, ge=1, le=10)
     # soft objectives promoted to hard constraints: term -> max value
     objective_caps: dict[str, int] = Field(default_factory=dict)
 
@@ -356,7 +360,8 @@ def get_settings(conn: sqlite3.Connection) -> dict:
     for r in conn.execute("SELECT key, value FROM settings"):
         k, v = r["key"], r["value"]
         try:
-            if k in ("teacher_capacity", "student_day_cap"):
+            if k in ("teacher_capacity", "student_day_cap",
+                     "single_day_max"):
                 out[k] = int(v)
             elif k == "objective_caps":
                 caps = json.loads(v)
@@ -387,6 +392,7 @@ def write_settings(body: SettingsIn,
         raise HTTPException(422, "objective cap bounds must be 0-999")
     rows = [("teacher_capacity", str(body.teacher_capacity)),
             ("student_day_cap", str(body.student_day_cap)),
+            ("single_day_max", str(body.single_day_max)),
             ("objective_caps", json.dumps(body.objective_caps))]
     with conn:
         conn.executemany(
@@ -399,7 +405,7 @@ def _validate_with_settings(conn, data, lessons):
     s = get_settings(conn)
     return validate(data, lessons, s["teacher_capacity"],
                     s["student_day_cap"], _hard_consecutive(s),
-                    s["objective_caps"])
+                    s["objective_caps"], single_day_max=s["single_day_max"])
 
 
 # ------------------------------------------------------------ CSV import/export
@@ -514,6 +520,7 @@ def generate_schedule(opts: GenerateOptions,
             teacher_capacity=s["teacher_capacity"],
             student_day_cap=s["student_day_cap"],
             require_consecutive=_hard_consecutive(s),
+            single_day_max=s["single_day_max"],
             objective_caps=s["objective_caps"] or None,
             weights=ObjectiveWeights.lexicographic(order),
             deterministic_time=opts.v2_time_budget,
@@ -539,7 +546,8 @@ def generate_schedule(opts: GenerateOptions,
                 teacher_capacity=s["teacher_capacity"],
                 student_day_cap=s["student_day_cap"],
                 require_consecutive=_hard_consecutive(s),
-                objective_order=capped + rest)
+                objective_order=capped + rest,
+                single_day_max=s["single_day_max"])
     with conn:
         conn.execute("DELETE FROM lessons")
         conn.executemany(
@@ -564,8 +572,10 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     lessons = load_lessons(conn)
     stats = teacher_day_stats(data, lessons)
     sstats = student_day_stats(data, lessons)
+    s = get_settings(conn)
     (double_days, gap_days, slot_spread, total_days, single_days,
-     day_spread) = schedule_objective(data, lessons)
+     day_spread) = schedule_objective(
+        data, lessons, single_day_max=s["single_day_max"])
     return {
         "lessons": [l.__dict__ for l in lessons],
         "violations": _violations_json(

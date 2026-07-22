@@ -290,6 +290,67 @@ def test_cpsat_minimizes_teacher_single_lesson_days():
     assert days == {"2026-07-27"}          # both lessons share Monday
 
 
+def test_cpsat_honors_single_day_threshold():
+    """single_day_max=2 counts two-lesson days as 'too few'. s1/s2 are
+    Monday-only, s4 is Tuesday-only, s3 can do either. At the default
+    threshold the optimum splits 2+2 (no single-lesson day); with
+    threshold 2 that costs 2, so the optimum packs s3 onto Monday
+    (3+1, cost 1)."""
+    d = make_data()
+    d.students = {f"s{i}": f"S{i}" for i in range(1, 5)}
+    d.teachers = {"t1": "Tanaka"}
+    d.teacher_subjects = {("t1", "math")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.student_availability = {
+        ("s1", "mon-1"), ("s2", "mon-2"),
+        ("s3", "mon-3"), ("s3", "tue-1"), ("s4", "tue-2")}
+    d.student_needs = {(st, "math"): 1 for st in d.students}
+    w = ObjectiveWeights(teacher_single_day=100)
+
+    split = solve_v2(d, config=SolverConfig(weights=w))
+    assert split.backend == "cpsat" and split.complete
+    mon = [l for l in split.lessons
+           if d.timeslots[l.timeslot_id].date == "2026-07-27"]
+    assert len(mon) == 2                    # 2+2: zero single-lesson days
+    assert objective_terms(d, split.lessons)["teacher_single_day"] == 0
+
+    packed = solve_v2(d, config=SolverConfig(weights=w, single_day_max=2))
+    assert packed.backend == "cpsat" and packed.complete
+    mon = [l for l in packed.lessons
+           if d.timeslots[l.timeslot_id].date == "2026-07-27"]
+    assert len(mon) == 3                    # 3+1 beats 2+2 at threshold 2
+    assert objective_terms(d, packed.lessons,
+                           single_day_max=2)["teacher_single_day"] == 1
+
+
+def test_cpsat_enforces_single_day_threshold_cap():
+    """The promoted cap and the CP encoding must agree on the threshold.
+    A 2+2 split satisfies a teacher_single_day<=0 cap at the default
+    threshold, but with single_day_max=2 every worked day needs >=3
+    lessons — the only such layout puts all four lessons on Monday
+    (pairing s3 and s4 in the last period)."""
+    d = make_data()
+    d.students = {f"s{i}": f"S{i}" for i in range(1, 5)}
+    d.teachers = {"t1": "Tanaka"}
+    d.teacher_subjects = {("t1", "math")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.rooms = {"r1": Room("r1", "Room 1", 2)}     # allow slot pairing
+    d.student_availability = {
+        ("s1", "mon-1"), ("s2", "mon-2"),
+        ("s3", "mon-3"), ("s3", "tue-1"),
+        ("s4", "mon-3"), ("s4", "tue-1")}
+    d.student_needs = {(st, "math"): 1 for st in d.students}
+    cfg = SolverConfig(weights=ObjectiveWeights.lexicographic(),
+                       single_day_max=2,
+                       objective_caps={"teacher_single_day": 0})
+    r = solve_v2(d, config=cfg)
+    assert r.backend == "cpsat" and r.complete
+    assert validate(d, r.lessons, objective_caps=cfg.objective_caps,
+                    single_day_max=2) == []
+    days = {d.timeslots[l.timeslot_id].date for l in r.lessons}
+    assert days == {"2026-07-27"}                 # everything on Monday
+
+
 def test_cpsat_higher_day_cap_contiguous_triple():
     d = make_data(n_slots_per_day=4, days=("Mon",))
     d.subjects["sci"] = "Science"
