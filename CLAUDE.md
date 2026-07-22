@@ -52,12 +52,15 @@ weeks and marks non-term days `in_term: false`.
   (`student_day_gap`; same-slot pairs are H6's business, not H8's).
   Soft top objective: minimize `student_double_days` (one lesson/day as
   far as possible) — first element of `schedule_objective`, which is now
-  (student_double_days, slot_spread, total_days, day_spread).
+  (student_double_days, student_day_gaps, slot_spread, total_days,
+  teacher_single_days, day_spread).
   `student_day_stats` powers the Status-panel per-student monitor
   (`student_stats` in GET /api/schedule; rows with double days get the
   `double-day` warning highlight).
 - Soft-objective priority is USER-SORTABLE: `OBJECTIVE_TERMS` names the
-  four terms; `schedule_objective(data, lessons, order)` and
+  terms (currently six, incl. `teacher_single_day` = days where a
+  teacher has exactly one lesson); `schedule_objective(data, lessons,
+  order)` and
   `ObjectiveWeights.lexicographic(order)` both take a permutation, and
   generate accepts `objective_order` (422 on non-permutations). The UI's
   drag list (`state.objOrder`, `#prio-list`) is the source of that order.

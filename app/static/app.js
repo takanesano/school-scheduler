@@ -6,6 +6,7 @@ const OBJ_LABELS = {
   student_day_gap: "Multiple lessons on a day must be consecutive",
   teacher_slot_spread: "Even lesson counts across teachers",
   teacher_working_day: "Few teacher working days",
+  teacher_single_day: "Few teacher days with only one lesson",
   teacher_day_spread: "Even working-day counts across teachers",
 };
 
@@ -658,7 +659,7 @@ async function renderSchedule(root) {
   const caps = settings.objective_caps || {};
   const CAP_DEFAULTS = { student_double_day: 0, student_day_gap: 0,
                          teacher_slot_spread: 1, teacher_working_day: 30,
-                         teacher_day_spread: 1 };
+                         teacher_single_day: 0, teacher_day_spread: 1 };
   let dragKey = null;
 
   async function putCaps(newCaps) {
@@ -946,6 +947,7 @@ async function renderSchedule(root) {
         with non-consecutive lessons: ${o.student_day_gaps} ·
         lesson-count spread between teachers (max−min): ${o.slot_spread} ·
         total teacher working days: ${o.total_days} ·
+        single-lesson teacher days: ${o.teacher_single_days} ·
         day-count spread: ${o.day_spread}</p></div>`);
     status.append(wl);
   }

@@ -564,7 +564,7 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     lessons = load_lessons(conn)
     stats = teacher_day_stats(data, lessons)
     sstats = student_day_stats(data, lessons)
-    (double_days, gap_days, slot_spread, total_days,
+    (double_days, gap_days, slot_spread, total_days, single_days,
      day_spread) = schedule_objective(data, lessons)
     return {
         "lessons": [l.__dict__ for l in lessons],
@@ -582,6 +582,7 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
         "objective": {"student_double_days": double_days,
                       "student_day_gaps": gap_days,
                       "slot_spread": slot_spread, "total_days": total_days,
+                      "teacher_single_days": single_days,
                       "day_spread": day_spread},
     }
 

@@ -66,10 +66,11 @@ def test_lexicographic_weights_dominate_in_order():
 def test_lexicographic_weights_follow_custom_order():
     w = ObjectiveWeights.lexicographic(
         ["teacher_working_day", "student_double_day", "student_day_gap",
-         "teacher_day_spread", "teacher_slot_spread"])
+         "teacher_single_day", "teacher_day_spread",
+         "teacher_slot_spread"])
     assert w.teacher_working_day > w.student_double_day \
-        > w.student_day_gap > w.teacher_day_spread \
-        > w.teacher_slot_spread > 0
+        > w.student_day_gap > w.teacher_single_day \
+        > w.teacher_day_spread > w.teacher_slot_spread > 0
     with pytest.raises(ValueError):
         ObjectiveWeights.lexicographic(["student_double_day"])
 
@@ -82,7 +83,8 @@ def test_objective_terms_and_weighted_cost():
     terms = objective_terms(d, lessons)
     assert terms == {"student_double_day": 1, "student_day_gap": 0,
                      "teacher_slot_spread": 1, "teacher_working_day": 2,
-                     "teacher_day_spread": 0, "changed_lesson": 0}
+                     "teacher_single_day": 1, "teacher_day_spread": 0,
+                     "changed_lesson": 0}
     cfg = SolverConfig(weights=ObjectiveWeights(
         student_double_day=10, teacher_slot_spread=5,
         teacher_working_day=1))
@@ -226,7 +228,8 @@ def test_cpsat_enforces_promoted_objective_cap():
     d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
     days_first = ObjectiveWeights.lexicographic(
         ["student_double_day", "student_day_gap", "teacher_working_day",
-         "teacher_slot_spread", "teacher_day_spread"])
+         "teacher_single_day", "teacher_slot_spread",
+         "teacher_day_spread"])
     free = solve_v2(d, config=SolverConfig(weights=days_first))
     assert len({l.teacher_id for l in free.lessons}) == 1
 
@@ -251,7 +254,8 @@ def test_always_active_is_stronger_than_any_priority_order():
     d.student_needs = {("s1", "math"): 1, ("s1", "eng"): 1}
     demoted = ObjectiveWeights.lexicographic(
         ["teacher_working_day", "teacher_slot_spread",
-         "teacher_day_spread", "student_day_gap", "student_double_day"])
+         "teacher_single_day", "teacher_day_spread", "student_day_gap",
+         "student_double_day"])
 
     free = solve_v2(d, config=SolverConfig(weights=demoted))
     assert objective_terms(d, free.lessons)["student_double_day"] == 1
@@ -264,6 +268,26 @@ def test_always_active_is_stronger_than_any_priority_order():
     assert objective_terms(d, capped.lessons)["student_double_day"] == 0
     # the price (a second working day) was paid, as it must be
     assert objective_terms(d, capped.lessons)["teacher_working_day"] == 2
+
+
+def test_cpsat_minimizes_teacher_single_lesson_days():
+    """s1 can only attend Mon P1; s2 is free everywhere. Placing s2 on a
+    different day would leave the sole teacher with two single-lesson
+    days — weighting teacher_single_day pulls s2 onto Monday instead."""
+    d = make_data()
+    d.teachers = {"t1": "Tanaka"}
+    d.teacher_subjects = {("t1", "math"), ("t1", "eng")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.student_availability = (
+        {("s1", "mon-1")} | {("s2", s) for s in d.timeslots})
+    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    cfg = SolverConfig(weights=ObjectiveWeights(teacher_single_day=100))
+    r = solve_v2(d, config=cfg)
+    assert r.backend == "cpsat"
+    assert r.complete
+    assert objective_terms(d, r.lessons)["teacher_single_day"] == 0
+    days = {d.timeslots[l.timeslot_id].date for l in r.lessons}
+    assert days == {"2026-07-27"}          # both lessons share Monday
 
 
 def test_cpsat_higher_day_cap_contiguous_triple():

@@ -57,6 +57,7 @@ class ObjectiveWeights:
     student_day_gap: float = 0.0      # per (student, day) non-contiguous
     teacher_slot_spread: float = 0.0  # per lesson of max-min load spread
     teacher_working_day: float = 0.0  # per (teacher, day) worked
+    teacher_single_day: float = 0.0   # per (teacher, day) with ONE lesson
     teacher_day_spread: float = 0.0   # per day of max-min day-count spread
     changed_lesson: float = 0.0       # per lesson differing from a
     #                                   reference schedule (rescheduling)
@@ -74,7 +75,8 @@ class ObjectiveWeights:
         if sorted(order) != sorted(OBJECTIVE_TERMS):
             raise ValueError(
                 f"order must be a permutation of {OBJECTIVE_TERMS}")
-        magnitudes = [100_000_000.0, 1_000_000.0, 10_000.0, 100.0, 1.0]
+        magnitudes = [10_000_000_000.0, 100_000_000.0, 1_000_000.0,
+                      10_000.0, 100.0, 1.0]
         return cls(**{name: magnitudes[i] for i, name in enumerate(order)})
 
 
@@ -336,18 +338,30 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             m.Add(total <= 1 + (config.student_day_cap - 1) * dd)
             dd_vars.append(dd)
 
-    # teacher working-day indicators and per-teacher day counts
+    # teacher working-day indicators, per-teacher day counts, and
+    # single-lesson-day indicators (exactly one lesson on a day)
     teacher_days = sorted(set(by_teacher_day) | set(pin_teacher_day))
     wd_vars = []
+    sd_vars = []
+    need_sd = bool(w.teacher_single_day or "teacher_single_day" in caps)
     day_count_of: dict[str, list] = defaultdict(list)
     for (t, date) in teacher_days:
         wd = m.NewBoolVar(f"wd[{t},{date}]")
         cap_day = config.teacher_capacity * len(set(day_periods[date]))
-        m.Add(sum(by_teacher_day.get((t, date), [])) <= cap_day * wd)
+        load = (sum(by_teacher_day.get((t, date), []))
+                + pin_teacher_day.get((t, date), 0))
+        m.Add(load <= cap_day * wd)
         if pin_teacher_day.get((t, date), 0):
             m.Add(wd == 1)
         wd_vars.append(wd)
         day_count_of[t].append(wd)
+        if need_sd:
+            # sd = 1 forced when the day is worked with exactly one
+            # lesson (wd=1, load=1 -> 2*wd - load = 1); as a side effect
+            # wd is forced honest (0) on load-0 days
+            sd = m.NewBoolVar(f"sd[{t},{date}]")
+            m.Add(2 * wd - load <= sd)
+            sd_vars.append(sd)
 
     # ---- objective terms and promoted hard caps
     total_sessions = sum(remaining.values()) + len(pinned)
@@ -364,6 +378,10 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         obj += [int(round(w.teacher_working_day)) * wd for wd in wd_vars]
     if "teacher_working_day" in caps:
         m.Add(sum(wd_vars) <= caps["teacher_working_day"])
+    if w.teacher_single_day:
+        obj += [int(round(w.teacher_single_day)) * sd for sd in sd_vars]
+    if "teacher_single_day" in caps:
+        m.Add(sum(sd_vars) <= caps["teacher_single_day"])
     elig = eligible_teachers(data)
     pin_teacher_total = Counter(l.teacher_id for l in pinned)
     if (w.teacher_slot_spread or "teacher_slot_spread" in caps) and elig:
