@@ -2,7 +2,7 @@
 
 The sample is a large generated term: 60 students, 10 teachers,
 2026-07-21..2026-08-31 minus Sundays × 6 periods (216 slots), one
-30-seat hall, ~3 subjects per student with EXACTLY 5 sessions each
+12-seat hall, ~3 subjects per student with EXACTLY 5 sessions each
 (~900 lessons).
 All teachers teach Japanese/English/Social Studies; only five also
 teach Math and Science. Regenerate with
@@ -34,6 +34,8 @@ def test_sample_data_imports_and_solves(tmp_path):
         data = load_dataset(conn)
     finally:
         conn.close()
+
+    assert data.rooms["hall"].capacity == 12
 
     # only five teachers may teach math / science
     math_sci = {t for (t, su) in data.teacher_subjects

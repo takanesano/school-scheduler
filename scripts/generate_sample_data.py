@@ -1,7 +1,7 @@
 """Regenerate sample_data/ — a large summer term.
 
 Deterministic (fixed seed): 60 students, 10 teachers, 2026-07-21 to
-2026-08-31 with Sundays off and 6 periods per day, one 30-seat hall.
+2026-08-31 with Sundays off and 6 periods per day, one 12-seat hall.
 Each student takes ~3 subjects with EXACTLY 5 sessions each (~900
 lessons). All teachers teach Japanese / English / Social Studies; only
 five of them also teach Math and Science.
@@ -128,7 +128,7 @@ def main():
     write("students.csv", "id,name", students)
     write("teachers.csv", "id,name", teachers)
     write("subjects.csv", "id,name", sorted(SUBJECTS.items()))
-    write("rooms.csv", "id,name,capacity", [("hall", "Main Hall", 30)])
+    write("rooms.csv", "id,name,capacity", [("hall", "Main Hall", 12)])
     write("timeslots.csv", "id,date,period,label",
           [(sid, d.isoformat(), p, PERIODS[p]) for sid, d, p in slots])
     write("teacher_subjects.csv", "teacher_id,subject_id", teacher_subjects)
