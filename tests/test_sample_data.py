@@ -1,8 +1,9 @@
 """The shipped sample data must import cleanly and solve completely.
 
 The sample is a large generated term: 60 students, 10 teachers,
-2026-07-21..2026-08-31 minus Sundays × 5 periods (180 slots), one
-30-seat hall, ~3 subjects × ~5 sessions per student (~900 lessons).
+2026-07-21..2026-08-31 minus Sundays × 6 periods (216 slots), one
+30-seat hall, ~3 subjects per student with EXACTLY 5 sessions each
+(~900 lessons).
 All teachers teach Japanese/English/Social Studies; only five also
 teach Math and Science. Regenerate with
 scripts/generate_sample_data.py.
@@ -24,7 +25,7 @@ def test_sample_data_imports_and_solves(tmp_path):
     assert counts["students"] == 60
     assert counts["teachers"] == 10
     assert counts["rooms"] == 1
-    assert counts["timeslots"] == 180  # 36 days (Sundays off) x 5 periods
+    assert counts["timeslots"] == 216  # 36 days (Sundays off) x 6 periods
     # 10 teachers x (jpn, eng, soc) + 5 teachers x (math, sci)
     assert counts["teacher_subjects"] == 40
 
@@ -42,12 +43,10 @@ def test_sample_data_imports_and_solves(tmp_path):
             if su in ("jpn", "eng", "soc")}
     assert len(core) == 10
 
-    # ~3 subjects per student, ~5 sessions per subject (as specified)
+    # ~3 subjects per student; EXACTLY 5 sessions per subject
     subj_per_student = len(data.student_needs) / len(data.students)
     assert 2.6 <= subj_per_student <= 3.4, subj_per_student
-    sessions_per_pair = (sum(data.student_needs.values())
-                         / len(data.student_needs))
-    assert 4.5 <= sessions_per_pair <= 5.5, sessions_per_pair
+    assert all(n == 5 for n in data.student_needs.values())
 
     assert check_input_problems(data) == []
     result = solve(data)

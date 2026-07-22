@@ -1,10 +1,10 @@
 """Regenerate sample_data/ — a large summer term.
 
 Deterministic (fixed seed): 60 students, 10 teachers, 2026-07-21 to
-2026-08-31 with Sundays off and 5 periods per day, one 30-seat hall.
-Each student takes ~3 subjects with ~5 sessions each (avg ~15 sessions
-per student, ~900 lessons). All teachers teach Japanese / English /
-Social Studies; only five of them also teach Math and Science.
+2026-08-31 with Sundays off and 6 periods per day, one 30-seat hall.
+Each student takes ~3 subjects with EXACTLY 5 sessions each (~900
+lessons). All teachers teach Japanese / English / Social Studies; only
+five of them also teach Math and Science.
 
 Run from the project root:
     .venv/bin/python scripts/generate_sample_data.py
@@ -33,7 +33,7 @@ rng = random.Random(20260801)
 
 START, END = dt.date(2026, 7, 21), dt.date(2026, 8, 31)
 PERIODS = {1: "09:00-10:10", 2: "10:20-11:30", 3: "11:40-12:50",
-           4: "14:00-15:10", 5: "15:20-16:30"}
+           4: "14:00-15:10", 5: "15:20-16:30", 6: "16:40-17:50"}
 WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 SURNAMES = ["Sato", "Suzuki", "Takahashi", "Tanaka", "Ito", "Watanabe",
@@ -90,7 +90,7 @@ def main():
     # generous anyway so the solver has room to optimize.
     def band(min_width):
         lo = rng.choice([1, 1, 2])
-        hi = rng.choice([4, 5, 5])
+        hi = rng.choice([4, 5, 6, 6])
         if hi - lo + 1 < min_width:
             lo, hi = 1, min_width
         return range(lo, hi + 1)
@@ -113,18 +113,17 @@ def main():
                 student_avail.append((stid, sid))
         student_days[stid] = sum(1 for d in days if d.weekday() in wdays)
 
-    # ---- needs: ~3 subjects per student (avg 3), ~5 sessions per
-    # subject (avg 5), clamped so the student's 2-per-day capacity is
-    # never exceeded
+    # ---- needs: ~3 subjects per student (avg 3), EXACTLY 5 sessions
+    # per subject. Availability is generous enough that 5 x subjects
+    # always fits the 2-per-day capacity; assert it anyway.
+    SESSIONS = 5
     needs = []
     for stid, _ in students:
-        budget = 2 * student_days[stid] - 2      # leave breathing room
         subjects_taken = rng.sample(subj_ids, rng.choice([2, 3, 3, 4]))
-        for i, su in enumerate(subjects_taken):
-            per_subject_cap = max(2, budget // (len(subjects_taken) - i))
-            n = min(rng.choice([4, 5, 5, 6]), per_subject_cap)
-            needs.append((stid, su, n))
-            budget -= n
+        assert SESSIONS * len(subjects_taken) <= 2 * student_days[stid] - 2, \
+            f"{stid} cannot fit {len(subjects_taken)} x {SESSIONS} sessions"
+        for su in subjects_taken:
+            needs.append((stid, su, SESSIONS))
 
     write("students.csv", "id,name", students)
     write("teachers.csv", "id,name", teachers)
