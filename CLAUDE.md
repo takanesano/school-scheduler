@@ -58,15 +58,20 @@ weeks and marks non-term days `in_term: false`.
   (`student_stats` in GET /api/schedule; rows with double days get the
   `double-day` warning highlight).
 - Soft-objective priority is USER-SORTABLE: `OBJECTIVE_TERMS` names the
-  terms (currently six, incl. `teacher_single_day` = days where a
-  teacher has exactly one lesson); `schedule_objective(data, lessons,
+  terms (currently six, incl. `teacher_single_day` = worked days where
+  a teacher has at most `single_day_max` lessons — that threshold is a
+  persisted setting, default 1, edited inline on the rule card and
+  threaded as a `single_day_max=` kwarg through
+  validate/objective_term_values/schedule_objective/
+  optimize_teacher_days/SolverConfig; CP encoding
+  `(K+1)*wd - load <= K*sd`); `schedule_objective(data, lessons,
   order)` and
   `ObjectiveWeights.lexicographic(order)` both take a permutation, and
   generate accepts `objective_order` (422 on non-permutations). The UI's
   drag list (`state.objOrder`, `#prio-list`) is the source of that order.
 - Hard-constraint SETTINGS persist in the `settings` table (GET/PUT
-  /api/settings): teacher_capacity, student_day_cap, and
-  `objective_caps` (an objective at "priority 0" — dragged above the
+  /api/settings): teacher_capacity, student_day_cap, single_day_max,
+  and `objective_caps` (an objective at "priority 0" — dragged above the
   divider in the single rules list — becomes a hard "term ≤ bound" cap;
   the scalar settings currently have no UI, API only). Consecutiveness
   is NOT a boolean setting anymore: it is the `student_day_gap`

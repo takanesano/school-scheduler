@@ -6,7 +6,7 @@ const OBJ_LABELS = {
   student_day_gap: "Multiple lessons on a day must be consecutive",
   teacher_slot_spread: "Even lesson counts across teachers",
   teacher_working_day: "Few teacher working days",
-  teacher_single_day: "Few teacher days with only one lesson",
+  teacher_single_day: "Few teacher days with too few lessons",
   teacher_day_spread: "Even working-day counts across teachers",
 };
 
@@ -662,16 +662,19 @@ async function renderSchedule(root) {
                          teacher_single_day: 0, teacher_day_spread: 1 };
   let dragKey = null;
 
-  async function putCaps(newCaps) {
+  async function putObjSettings(patch) {
     try {
       await api("PUT", "/api/settings", {
         teacher_capacity: settings.teacher_capacity,
         student_day_cap: settings.student_day_cap,
-        objective_caps: newCaps,
+        single_day_max: settings.single_day_max,
+        objective_caps: caps,
+        ...patch,
       });
       render();   // everything revalidates against the new rules
     } catch (e) { toast(e.message, true); render(); }
   }
+  const putCaps = (newCaps) => putObjSettings({ objective_caps: newCaps });
 
   // moved card ends up at rank 0 (hard) or a soft position around target
   function settle(moved, { hard, targetKey = null, after = false,
@@ -722,14 +725,21 @@ async function renderSchedule(root) {
 
   function makeCard(key, rank) {
     const hard = rank === 0;
+    // the single-day term's threshold is edited right on the card:
+    // "few teacher days with at most [N] lesson(s)"
+    const label = key === "teacher_single_day"
+      ? `Few teacher days with at most <input type="number" min="1"
+          max="10" value="${settings.single_day_max}" data-sdm
+          class="inline-num"> lesson(s)`
+      : esc(OBJ_LABELS[key]);
     const li = el(hard
       ? `<li class="prio-item hard-obj" draggable="true" data-key="${key}">
-          <span class="prio-rank rank-zero">0</span> ${esc(OBJ_LABELS[key])}
+          <span class="prio-rank rank-zero">0</span> <span>${label}</span>
           <span class="hard-bound">≤ <input type="number" min="0" max="999"
             value="${caps[key]}" data-bound="${key}"></span>
           <span class="prio-grip">⠿</span></li>`
       : `<li class="prio-item" draggable="true" data-key="${key}">
-          <span class="prio-rank">${rank}</span> ${esc(OBJ_LABELS[key])}
+          <span class="prio-rank">${rank}</span> <span>${label}</span>
           <span class="prio-grip">⠿</span></li>`);
     li.ondragstart = (e) => {
       dragKey = key;
@@ -759,11 +769,24 @@ async function renderSchedule(root) {
                       after: e.clientY > rect.top + rect.height / 2 });
     };
     if (hard) {
-      const bound = li.querySelector("input");
+      const bound = li.querySelector("input[data-bound]");
       bound.onchange = () => {
         const v = parseInt(bound.value, 10);
         if (!(v >= 0 && v <= 999)) return toast("bound must be 0-999", true);
         putCaps({ ...caps, [key]: v });
+      };
+    }
+    const sdm = li.querySelector("input[data-sdm]");
+    if (sdm) {
+      // clicking/typing in the input must not start a card drag
+      sdm.onmousedown = (e) => { e.stopPropagation(); li.draggable = false; };
+      sdm.onblur = () => { li.draggable = true; };
+      sdm.onchange = () => {
+        const v = parseInt(sdm.value, 10);
+        if (!(v >= 1 && v <= 10)) {
+          return toast("lesson threshold must be 1-10", true);
+        }
+        putObjSettings({ single_day_max: v });
       };
     }
     return li;
@@ -947,7 +970,8 @@ async function renderSchedule(root) {
         with non-consecutive lessons: ${o.student_day_gaps} ·
         lesson-count spread between teachers (max−min): ${o.slot_spread} ·
         total teacher working days: ${o.total_days} ·
-        single-lesson teacher days: ${o.teacher_single_days} ·
+        teacher days with ≤${settings.single_day_max}
+        lesson${settings.single_day_max > 1 ? "s" : ""}: ${o.teacher_single_days} ·
         day-count spread: ${o.day_spread}</p></div>`);
     status.append(wl);
   }
@@ -1381,7 +1405,21 @@ const RENDERERS = {
 
 let _lastRenderedTab = null;
 
+// Overlapping renders would each append their panels after the other's
+// innerHTML clear, duplicating the page — serialize them instead:
+// a render() during a render() coalesces into ONE follow-up pass.
+let _renderRunning = false;
+let _renderQueued = false;
+
 async function render() {
+  if (_renderRunning) { _renderQueued = true; return; }
+  _renderRunning = true;
+  try {
+    do { _renderQueued = false; await _renderOnce(); } while (_renderQueued);
+  } finally { _renderRunning = false; }
+}
+
+async function _renderOnce() {
   // Re-rendering the same tab (after a drag, edit, toggle, …) must not
   // jump the page back to the top; only a tab switch starts at the top.
   const sameTab = _lastRenderedTab === state.tab;

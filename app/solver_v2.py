@@ -57,7 +57,8 @@ class ObjectiveWeights:
     student_day_gap: float = 0.0      # per (student, day) non-contiguous
     teacher_slot_spread: float = 0.0  # per lesson of max-min load spread
     teacher_working_day: float = 0.0  # per (teacher, day) worked
-    teacher_single_day: float = 0.0   # per (teacher, day) with ONE lesson
+    teacher_single_day: float = 0.0   # per (teacher, day) with at most
+    #                                   SolverConfig.single_day_max lessons
     teacher_day_spread: float = 0.0   # per day of max-min day-count spread
     changed_lesson: float = 0.0       # per lesson differing from a
     #                                   reference schedule (rescheduling)
@@ -87,6 +88,8 @@ class SolverConfig:
     teacher_capacity: int = 2         # H5: simultaneous students/teacher
     student_day_cap: int = 2          # H8: max lessons per student-day
     require_consecutive: bool = True  # H8: a student's day is contiguous
+    # teacher_single_day counts worked days with at most this many lessons
+    single_day_max: int = 1
     # soft objectives promoted to hard constraints: term name -> max value
     objective_caps: dict[str, int] | None = None
     weights: ObjectiveWeights = field(
@@ -102,7 +105,8 @@ class SolverConfig:
 
 
 def objective_terms(data: Dataset, lessons: list[Lesson],
-                    reference: list[Lesson] | None = None) -> dict[str, int]:
+                    reference: list[Lesson] | None = None,
+                    single_day_max: int = 1) -> dict[str, int]:
     """The named objective terms, evaluated on a concrete schedule."""
     changed = 0
     if reference is not None:
@@ -110,7 +114,8 @@ def objective_terms(data: Dataset, lessons: list[Lesson],
                           l.room_id, l.timeslot_id))
         changed = sum((Counter(map(key, reference))
                        - Counter(map(key, lessons))).values())
-    return {**objective_term_values(data, lessons),
+    return {**objective_term_values(data, lessons,
+                                    single_day_max=single_day_max),
             "changed_lesson": changed}
 
 
@@ -118,7 +123,8 @@ def weighted_cost(data: Dataset, lessons: list[Lesson],
                   config: SolverConfig,
                   reference: list[Lesson] | None = None) -> float:
     """Single scalar cost shared by every backend."""
-    terms = objective_terms(data, lessons, reference)
+    terms = objective_terms(data, lessons, reference,
+                            single_day_max=config.single_day_max)
     return sum(getattr(config.weights, name) * value
                for name, value in terms.items())
 
@@ -141,7 +147,8 @@ def _v1_pipeline(data: Dataset, config: SolverConfig,
             teacher_capacity=config.teacher_capacity,
             student_day_cap=config.student_day_cap,
             require_consecutive=config.require_consecutive,
-            objective_order=order)
+            objective_order=order,
+            single_day_max=config.single_day_max)
     return result
 
 
@@ -171,7 +178,8 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
         return not (validate(data, lessons, config.teacher_capacity,
                              config.student_day_cap,
                              config.require_consecutive,
-                             config.objective_caps)
+                             config.objective_caps,
+                             single_day_max=config.single_day_max)
                     or coverage_report(data, lessons))
     if not fully_valid(cp.lessons):
         return v1                      # backend misbehaved: v1 wins
@@ -356,11 +364,13 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         wd_vars.append(wd)
         day_count_of[t].append(wd)
         if need_sd:
-            # sd = 1 forced when the day is worked with exactly one
-            # lesson (wd=1, load=1 -> 2*wd - load = 1); as a side effect
-            # wd is forced honest (0) on load-0 days
+            # sd = 1 forced when the day is worked with at most
+            # single_day_max lessons (wd=1, 1 <= load <= K ->
+            # (K+1)*wd - load >= 1 > K*0); as a side effect wd is
+            # forced honest (0) on load-0 days ((K+1)*1 > K*1)
+            k = config.single_day_max
             sd = m.NewBoolVar(f"sd[{t},{date}]")
-            m.Add(2 * wd - load <= sd)
+            m.Add((k + 1) * wd - load <= k * sd)
             sd_vars.append(sd)
 
     # ---- objective terms and promoted hard caps

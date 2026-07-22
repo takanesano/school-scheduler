@@ -181,6 +181,8 @@ button.small {
 .prio-rank.rank-zero { background: var(--danger); }
 .hard-bound { margin-left: auto; font-size: 0.8rem; }
 .hard-bound input { width: 3.4rem; padding: 0.1rem 0.3rem; }
+.prio-item .inline-num { width: 2.8rem; padding: 0.1rem 0.3rem;
+                         margin: 0 0.1rem; }
 .prio-item.hard-obj .prio-grip { margin-left: 0.4rem; }
 #exact-opts { margin: 0.2rem 0 0 1.4rem; }
 .filter-box { margin: 0.3rem 0 0.6rem; }

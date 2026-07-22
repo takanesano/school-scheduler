@@ -62,8 +62,10 @@ order: (1) students get **one lesson per day as far as possible** —
 two-lesson days only when unavoidable; (2) lesson counts are as even as
 possible across teachers — no idle teacher next to an overloaded one;
 (3) each teacher's lessons are packed into as few working days as
-possible; (4) **days where a teacher has only a single lesson are kept
-to a minimum**; (5) working-day counts are evened out. The Status panel shows a
+possible; (4) **days where a teacher has too few lessons are kept to a
+minimum** — the threshold is editable right on the rule card ("few
+teacher days with at most N lessons", default 1); (5) working-day
+counts are evened out. The Status panel shows a
 per-teacher lessons / working-days table and a per-student table flagging
 every two-lesson day with its date, plus all four metrics — so each
 objective can be checked at a glance.
@@ -72,7 +74,8 @@ The Generate panel shows all rules as **one list**. Locked cards at the
 top are the built-in hard constraints. Below them, the six conditions —
 one lesson per day per student, multiple-lessons-must-be-consecutive,
 and the four teacher-workload objectives (including "few teacher days
-with only one lesson") — are draggable cards whose
+with at most N lessons", where N is edited on the card) — are
+draggable cards whose
 order is the lexicographic priority both solvers optimize
 (1 = most important). The consecutiveness condition starts at priority 0
 (always active) by default. Dragging a card **above the

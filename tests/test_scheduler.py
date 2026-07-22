@@ -3,8 +3,9 @@ import pytest
 
 from app.scheduler import (Dataset, Lesson, Room, Timeslot,
                            check_input_problems, coverage_report,
-                           optimize_teacher_days, schedule_objective, solve,
-                           student_day_stats, teacher_day_stats, validate)
+                           objective_term_values, optimize_teacher_days,
+                           schedule_objective, solve, student_day_stats,
+                           teacher_day_stats, teacher_single_days, validate)
 
 
 # Each nickname maps to one concrete date of a summer term (7/27 = Mon).
@@ -541,6 +542,37 @@ def test_objective_counts_slots_days_and_spreads():
     assert stats["t2"] == {"lessons": 0, "days": set()}
     # t1: 2 lessons/2 days, t2: 0/0 -> spreads 2, total days 2
     assert schedule_objective(d, lessons) == (0, 0, 2, 2, 2, 2)
+
+
+def test_teacher_single_days_threshold():
+    """The 'too few lessons' day counter honors the configurable
+    single_day_max: a worked day counts when 1 <= load <= threshold."""
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),   # t1 Mon: 1
+               Lesson("s1", "eng", "t1", "r1", "tue-1", id=2),    # t1 Tue: 2
+               Lesson("s2", "math", "t1", "r1", "tue-2", id=3),
+               Lesson("s2", "eng", "t2", "r1", "mon-1", id=4),    # t2 Mon: 3
+               Lesson("s1", "math", "t2", "r1", "mon-2", id=5),
+               Lesson("s2", "math", "t2", "r1", "mon-3", id=6)]
+    assert teacher_single_days(d, lessons) == 1              # exact-1 days
+    assert teacher_single_days(d, lessons, at_most=2) == 2   # + t1's Tue
+    assert teacher_single_days(d, lessons, at_most=3) == 3   # + t2's Mon
+    vals = objective_term_values(d, lessons, single_day_max=2)
+    assert vals["teacher_single_day"] == 2
+
+
+def test_objective_cap_uses_single_day_threshold():
+    """A promoted teacher_single_day cap must be judged with the
+    configured threshold, not a hard-coded 1."""
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+               Lesson("s2", "eng", "t1", "r1", "mon-2", id=2)]
+    caps = {"teacher_single_day": 0}
+    # a two-lesson day is fine at the default threshold (1)...
+    assert validate(d, lessons, objective_caps=caps) == []
+    # ...but violates the cap when days with <=2 lessons count
+    out = validate(d, lessons, objective_caps=caps, single_day_max=2)
+    assert codes(out) == ["objective_cap_exceeded"]
 
 
 def test_student_day_stats_reports_double_days():

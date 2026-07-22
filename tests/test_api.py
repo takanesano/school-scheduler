@@ -285,6 +285,21 @@ def test_schedule_reports_teacher_stats(client):
          "double_days": []}]
 
 
+def test_schedule_single_day_metric_honors_threshold(client):
+    """A two-lesson day is not 'too few' at the default threshold but is
+    once single_day_max is raised to 2 via settings."""
+    seed_world(client)
+    for st, slot in (("s1", "mon-1"), ("s2", "mon-2")):
+        client.post("/api/lessons", json={
+            "student_id": st, "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1", "timeslot_id": slot})
+    assert client.get(
+        "/api/schedule").json()["objective"]["teacher_single_days"] == 0
+    client.put("/api/settings", json={"single_day_max": 2})
+    assert client.get(
+        "/api/schedule").json()["objective"]["teacher_single_days"] == 1
+
+
 def test_schedule_reports_student_double_days(client):
     seed_world(client)
     for slot in ("mon-1", "mon-2"):
@@ -393,20 +408,22 @@ def test_generate_honors_objective_order(client):
 
 def test_settings_defaults_and_roundtrip(client):
     assert client.get("/api/settings").json() == {
-        "teacher_capacity": 2, "student_day_cap": 2,
+        "teacher_capacity": 2, "student_day_cap": 2, "single_day_max": 1,
         "objective_caps": {"student_day_gap": 0}}
     r = client.put("/api/settings", json={
-        "teacher_capacity": 1, "student_day_cap": 3,
+        "teacher_capacity": 1, "student_day_cap": 3, "single_day_max": 2,
         "objective_caps": {"teacher_slot_spread": 1}})
     assert r.status_code == 200
     assert client.get("/api/settings").json() == {
-        "teacher_capacity": 1, "student_day_cap": 3,
+        "teacher_capacity": 1, "student_day_cap": 3, "single_day_max": 2,
         "objective_caps": {"teacher_slot_spread": 1}}
 
 
 @pytest.mark.parametrize("body", [
     {"teacher_capacity": 0},
     {"student_day_cap": 9},
+    {"single_day_max": 0},
+    {"single_day_max": 11},
     {"objective_caps": {"nonsense": 1}},
     {"objective_caps": {"teacher_slot_spread": -1}},
 ])
