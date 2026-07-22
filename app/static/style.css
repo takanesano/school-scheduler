@@ -197,6 +197,11 @@ button.small {
 .chip.off { border-color: var(--border); background: var(--bg);
             color: var(--muted); text-decoration: line-through; }
 .filter-quick { display: flex; gap: 0.25rem; padding-top: 0.1rem; }
+.filter-sort { font-size: 0.8rem; color: var(--muted); margin: 0.35rem 0; }
+.filter-sort select { font-size: 0.8rem; padding: 0.1rem 0.3rem; }
+.chip-count { background: var(--accent); color: #fff; border-radius: 999px;
+              font-size: 0.68rem; padding: 0 0.35rem; margin-left: 0.15rem; }
+.chip.off .chip-count { background: var(--muted); }
 .filter-hidden { display: none !important; }
 @media (prefers-color-scheme: dark) {
   .chip { background: #223046; }
