@@ -13,6 +13,7 @@ const state = { tab: "schedule", keep: false, caution: true,
                 compress: true, exact: false, exactBudget: 8,
                 objOrder: Object.keys(OBJ_LABELS),
                 hiddenTeachers: new Set(), hiddenStudents: new Set(),
+                filterSort: "name",
                 calView: "overview", calPerson: null };
 
 const TABS = [
@@ -1001,8 +1002,38 @@ async function renderSchedule(root) {
   const filterActive = state.hiddenTeachers.size || state.hiddenStudents.size;
   const filterBox = el(`<details class="filter-box"${filterActive ? " open" : ""}>
     <summary>Filter <span class="muted" id="filter-note"></span></summary>
+    <div class="filter-sort">sort by
+      <select id="filter-sort">
+        <option value="name">name</option>
+        <option value="id">ID</option>
+        <option value="lessons">lesson count</option>
+      </select></div>
     <div class="filter-groups"></div></details>`);
   const groupsEl = $(".filter-groups", filterBox);
+  $("#filter-sort", filterBox).value = state.filterSort;
+
+  const lessonCount = { teacher: {}, student: {} };
+  for (const l of schedule.lessons) {
+    lessonCount.teacher[l.teacher_id] =
+      (lessonCount.teacher[l.teacher_id] || 0) + 1;
+    lessonCount.student[l.student_id] =
+      (lessonCount.student[l.student_id] || 0) + 1;
+  }
+
+  function sortedPeople(people, kind) {
+    const arr = [...people];
+    if (state.filterSort === "id") {
+      arr.sort((a, b) => a.id.localeCompare(b.id, undefined, {numeric: true}));
+    } else if (state.filterSort === "lessons") {
+      arr.sort((a, b) =>
+        (lessonCount[kind][b.id] || 0) - (lessonCount[kind][a.id] || 0)
+        || a.name.localeCompare(b.name));
+    } else {
+      arr.sort((a, b) => a.name.localeCompare(b.name) ||
+                         a.id.localeCompare(b.id));
+    }
+    return arr;
+  }
 
   function applyFilter() {
     const ht = state.hiddenTeachers, hs = state.hiddenStudents;
@@ -1025,7 +1056,7 @@ async function renderSchedule(root) {
       ? "— some lessons are hidden" : "";
   }
 
-  function chipGroup(label, people, hiddenSet) {
+  function chipGroup(label, people, hiddenSet, kind) {
     const row = el(`<div class="filter-row"><span class="filter-label">
       ${label}</span><span class="filter-chips"></span>
       <span class="filter-quick">
@@ -1033,9 +1064,12 @@ async function renderSchedule(root) {
         <button class="small" data-q="none">none</button></span></div>`);
     const chipsEl = $(".filter-chips", row);
     const chips = [];
-    for (const p of people) {
+    for (const p of sortedPeople(people, kind)) {
+      const n = lessonCount[kind][p.id] || 0;
+      const countTag = state.filterSort === "lessons"
+        ? ` <span class="chip-count">${n}</span>` : "";
       const chip = el(`<button class="chip${hiddenSet.has(p.id) ? " off" : ""}"
-        title="click to show/hide">${esc(p.name)}</button>`);
+        title="${n} lesson(s) — click to show/hide">${esc(p.name)}${countTag}</button>`);
       chip.onclick = () => {
         if (hiddenSet.has(p.id)) hiddenSet.delete(p.id);
         else hiddenSet.add(p.id);
@@ -1061,8 +1095,17 @@ async function renderSchedule(root) {
     };
     return row;
   }
-  groupsEl.append(chipGroup("Teachers", teachers, state.hiddenTeachers));
-  groupsEl.append(chipGroup("Students", students, state.hiddenStudents));
+
+  function renderChipGroups() {
+    groupsEl.replaceChildren(
+      chipGroup("Teachers", teachers, state.hiddenTeachers, "teacher"),
+      chipGroup("Students", students, state.hiddenStudents, "student"));
+  }
+  renderChipGroups();
+  $("#filter-sort", filterBox).onchange = (e) => {
+    state.filterSort = e.target.value;
+    renderChipGroups();
+  };
   grid.append(filterBox);
 
   // Shared caution flow for any lesson change (drag-move or inline edit).
