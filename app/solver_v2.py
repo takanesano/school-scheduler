@@ -94,13 +94,20 @@ class SolverConfig:
     objective_caps: dict[str, int] | None = None
     weights: ObjectiveWeights = field(
         default_factory=ObjectiveWeights.lexicographic)
-    # CP-SAT budget. deterministic_time is the primary cutoff: it is
-    # measured in CP-SAT's reproducible work units, so the same input
-    # always stops at the same point → identical schedules run-to-run
-    # even when optimality is not proven. time_limit_seconds is only a
-    # wall-clock safety net.
+    # CP-SAT budget. With num_workers == 1 (the default),
+    # deterministic_time is the primary cutoff: it is measured in
+    # CP-SAT's reproducible work units, so the same input always stops
+    # at the same point → identical schedules run-to-run even when
+    # optimality is not proven; time_limit_seconds is only a wall-clock
+    # safety net. With num_workers > 1 the search runs a parallel
+    # portfolio bounded by time_limit_seconds (wall clock) instead —
+    # dramatically stronger on big instances (presolve alone exhausts a
+    # single worker's budget there), at the price of run-to-run
+    # reproducibility. The solve_v2 gate applies either way, so the
+    # result is never worse than v1's.
     deterministic_time: float = 8.0
     time_limit_seconds: float = 60.0
+    num_workers: int = 1
     random_seed: int = 0              # fixed for determinism
 
 
@@ -286,6 +293,30 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             pin_sdp[(l.student_id, slot.date, slot.period)] += 1
             pin_teacher_day[(l.teacher_id, slot.date)] += 1
 
+    # ---- hint-derived values for every AUXILIARY variable.
+    # CP-SAT treats a hint as one candidate assignment: if any variable
+    # is missing it runs a completion search, and on large models it
+    # abandons that search — silently discarding the warm start. So
+    # every indicator/bound variable created below gets its value under
+    # the hint schedule too (the x-variable hints are added at the end).
+    hint_td: Counter = Counter()            # (teacher, date) -> load
+    hint_day_periods: dict[tuple[str, str], list[int]] = defaultdict(list)
+    hint_rst: set[tuple[str, str, str]] = set()
+    hint_tload: Counter = Counter()         # teacher -> total lessons
+    if hint is not None:
+        for l in hint:
+            slot = data.timeslots.get(l.timeslot_id)
+            if slot is None:
+                continue
+            hint_td[(l.teacher_id, slot.date)] += 1
+            hint_day_periods[(l.student_id, slot.date)].append(slot.period)
+            hint_rst.add((l.room_id, l.timeslot_id, l.teacher_id))
+            hint_tload[l.teacher_id] += 1
+
+    def hint_aux(var, value):
+        if hint is not None:
+            m.AddHint(var, value)
+
     # ---- variable indexes
     by_student_slot = defaultdict(list)
     by_teacher_slot = defaultdict(list)
@@ -333,8 +364,12 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         present = []
         for t in sorted(teachers - pinned_here):
             y = m.NewBoolVar(f"rt[{r},{sid},{t}]")
-            for v in by_room_slot_teacher[(r, sid, t)]:
-                m.Add(v <= y)
+            # aggregate encoding: one constraint per (room, slot,
+            # teacher) instead of one per lesson variable — sum >= 1
+            # forces y just as hard, at a fraction of the model size
+            vs = by_room_slot_teacher[(r, sid, t)]
+            m.Add(sum(vs) <= config.teacher_capacity * y)
+            hint_aux(y, 1 if (r, sid, t) in hint_rst else 0)
             present.append(y)
         m.Add(sum(present) <= tcap - len(pinned_here))
 
@@ -385,12 +420,18 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
                                 m.Add(occ(p) + occ(q) - occ(h) - 1 <= gd)
                         else:
                             m.Add(occ(p) + occ(q) - 1 <= gd)
+        h_ps = sorted(set(hint_day_periods.get((st, date), [])))
         if gd is not None:
+            hint_aux(gd, 1 if (len(h_ps) >= 2
+                               and h_ps[-1] - h_ps[0] != len(h_ps) - 1)
+                     else 0)
             gd_vars.append(gd)
         if w.student_double_day or "student_double_day" in caps:
             dd = m.NewBoolVar(f"dd[{st},{date}]")
             # total ≥ 2 forces dd = 1
             m.Add(total <= 1 + (config.student_day_cap - 1) * dd)
+            hint_aux(dd, 1 if len(hint_day_periods.get((st, date), []))
+                     >= 2 else 0)
             dd_vars.append(dd)
 
     # teacher working-day indicators, per-teacher day counts, and
@@ -408,6 +449,8 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         m.Add(load <= cap_day * wd)
         if pin_teacher_day.get((t, date), 0):
             m.Add(wd == 1)
+        h_load = hint_td.get((t, date), 0)
+        hint_aux(wd, 1 if h_load else 0)
         wd_vars.append(wd)
         day_count_of[t].append(wd)
         if need_sd:
@@ -418,6 +461,7 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             k = config.single_day_max
             sd = m.NewBoolVar(f"sd[{t},{date}]")
             m.Add((k + 1) * wd - load <= k * sd)
+            hint_aux(sd, 1 if 1 <= h_load <= k else 0)
             sd_vars.append(sd)
 
     # ---- objective terms and promoted hard caps
@@ -448,6 +492,9 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             load = sum(by_teacher[t]) + pin_teacher_total.get(t, 0)
             m.Add(lmax >= load)
             m.Add(lmin <= load)
+        h_loads = [hint_tload.get(t, 0) for t in elig]
+        hint_aux(lmax, max(h_loads, default=0))
+        hint_aux(lmin, min(h_loads, default=0))
         if w.teacher_slot_spread:
             obj.append(int(round(w.teacher_slot_spread)) * (lmax - lmin))
         if "teacher_slot_spread" in caps:
@@ -460,6 +507,10 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             count = sum(day_count_of.get(t, []))
             m.Add(dmax >= count)
             m.Add(dmin <= count)
+        h_days = [sum(1 for (t2, _d), n in hint_td.items()
+                      if t2 == t and n) for t in elig]
+        hint_aux(dmax, max(h_days, default=0))
+        hint_aux(dmin, min(h_days, default=0))
         if w.teacher_day_spread:
             obj.append(int(round(w.teacher_day_spread)) * (dmax - dmin))
         if "teacher_day_spread" in caps:
@@ -477,19 +528,23 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     m.Minimize(sum(obj) if obj else 0)
 
     if hint:
-        # hint EVERY variable (1 for hinted lessons, 0 otherwise): a
-        # complete hint is validated directly, while a partial one needs
-        # a completion search that CP-SAT abandons quickly
+        # hint EVERY lesson variable (1 for hinted lessons, 0 otherwise;
+        # the auxiliary indicators were hinted at their creation sites):
+        # a complete hint is validated directly, while a partial one
+        # needs a completion search that CP-SAT abandons on big models —
+        # silently discarding the warm start
         hint_keys = {(l.student_id, l.subject_id, l.timeslot_id,
                       l.teacher_id, l.room_id) for l in hint}
         for key, var in sorted(x.items()):
             m.AddHint(var, 1 if key in hint_keys else 0)
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_deterministic_time = config.deterministic_time
+    solver.parameters.num_workers = config.num_workers
+    if config.num_workers == 1:
+        # deterministic mode: the reproducible work-unit budget binds
+        solver.parameters.max_deterministic_time = config.deterministic_time
     solver.parameters.max_time_in_seconds = config.time_limit_seconds
     solver.parameters.random_seed = config.random_seed
-    solver.parameters.num_workers = 1
     solver.parameters.repair_hint = True   # for slightly-stale hints
     status = solver.Solve(m)
     if status == cp_model.INFEASIBLE:

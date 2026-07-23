@@ -156,10 +156,20 @@ weeks and marks non-term days `in_term: false`.
 - `app/solver_v2.py` is the IMPLEMENTED weight-driven CP-SAT solver
   (docs/solver-v2-plan.md). Key invariants: `solve_v2` always runs the
   v1 pipeline too and only returns the CP answer when it passes
-  validate+coverage AND has weighted_cost ≤ v1's; determinism comes from
-  `max_deterministic_time` (never rely on wall-clock cutoffs); the v1
-  solution (or reference) is fed as a COMPLETE hint — hint every
-  variable including zeros, partial hints get dropped by CP-SAT.
+  validate+coverage AND has weighted_cost ≤ v1's. Two budget modes
+  (`SolverConfig.num_workers`): 1 worker (default, used by tests and
+  resolve flows) is DETERMINISTIC via `max_deterministic_time`;
+  the generate endpoint uses num_workers=8 + wall-clock
+  `time_limit_seconds` = the user's budget — a single worker burns its
+  whole budget in PRESOLVE on ~900-lesson terms and never reaches the
+  warm start, while the parallel portfolio actually optimizes (sd
+  30→0, wd 222→124 in 120 s on the big sample) at the price of
+  run-to-run reproducibility. The v1 solution (or reference) is fed as
+  a COMPLETE hint — hint every variable including zeros AND every
+  auxiliary indicator (wd/sd/dd/gd/rt/lmax/lmin/dmax/dmin, each hinted
+  at its creation site): a hint missing any variable triggers a
+  completion search that CP-SAT abandons on big models, silently
+  discarding the warm start.
   `resolve_minimal_disruption` = reschedule with a dominating
   changed-lesson weight. Opt-in via `solver: "v2"` on generate / the
   "exact optimizer" checkbox; ortools is an optional dependency (module

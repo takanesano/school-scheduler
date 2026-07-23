@@ -97,13 +97,15 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   If the inputs make a complete schedule impossible, you get the best
   partial schedule plus exactly which needs could not be placed and why.
 - **Exact (CP-SAT)** — models the whole problem as a constraint program
-  with OR-tools and optimizes every priority at once. It keeps searching
-  for its whole **search budget** (configurable, default ~8 s), so
-  generation takes roughly that long — but the result is usually
-  strictly better; on the sample term it needs several fewer teacher
-  working days. It automatically falls back to the standard solver when
-  it cannot do better (its output is always re-checked by the same
-  validator). Requires the optional `ortools` dependency.
+  with OR-tools and optimizes every priority at once, using all CPU
+  cores. It keeps searching for its whole **search budget** (real
+  seconds, configurable), so generation takes roughly that long — but
+  the result is usually much better: on the large sample term two
+  minutes of budget roughly halves the teacher working days and
+  eliminates single-lesson days entirely. It automatically falls back
+  to the standard solver when it cannot do better (its output is
+  always re-checked by the same validator). Requires the optional
+  `ortools` dependency.
 
 ## Using the web interface
 

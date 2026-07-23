@@ -131,6 +131,18 @@ def test_cpsat_on_medium_term_beats_or_matches_v1():
     assert objective_terms(d, r.lessons)["student_double_day"] == 0
 
 
+def test_parallel_mode_returns_valid_gated_result():
+    """num_workers > 1 trades reproducibility for search strength (the
+    generate endpoint uses it); the result must still pass the same
+    validate/coverage/cost gate."""
+    d = medium_dataset()
+    cfg = SolverConfig(num_workers=2, time_limit_seconds=10.0)
+    r = solve_v2(d, config=cfg)
+    assert r.complete
+    assert_clean(d, r)
+    assert len(r.lessons) == 30
+
+
 def test_cpsat_is_deterministic():
     d = medium_dataset()
     assert solve_v2(d, config=FAST).lessons == \
