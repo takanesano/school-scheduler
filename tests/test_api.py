@@ -349,8 +349,18 @@ def test_generate_with_v2_solver(client):
     body = r.json()
     assert body["complete"] is True
     assert body["backend"] == "cpsat"
+    # the caller can see what the exact optimizer achieved
+    assert body["v2_outcome"] in ("optimal", "improved", "no_improvement")
     sched = client.get("/api/schedule").json()
     assert sched["violations"] == [] and sched["coverage"] == []
+
+
+def test_generate_v1_has_no_v2_outcome(client):
+    seed_world(client)
+    client.post("/api/student_needs", json={
+        "student_id": "s1", "subject_id": "math", "sessions": 1})
+    body = client.post("/api/schedule/generate", json={}).json()
+    assert body["v2_outcome"] is None
 
 
 def test_generate_rejects_unknown_solver(client):

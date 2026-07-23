@@ -180,9 +180,30 @@ def test_infeasible_falls_back_to_v1_partial():
     d.student_needs = {("s1", "math"): 1, ("s1", "eng"): 1}  # 1 slot only
     r = solve_v2(d)
     assert r.backend == "v1"
+    assert r.v2_outcome == "infeasible"
     assert not r.complete
     assert len(r.lessons) == 1
     assert validate(d, r.lessons) == []
+
+
+def test_v2_outcome_reported():
+    """solve_v2 tells the caller what the exact optimizer actually did:
+    proved-optimal on a trivial instance, and 'infeasible' when an
+    always-active bound admits no schedule at all."""
+    d = make_data()
+    d.student_needs = {("s1", "math"): 1}
+    r = solve_v2(d)
+    assert r.backend == "cpsat"
+    assert r.v2_outcome == "optimal"
+
+    capped = solve_v2(d, config=SolverConfig(
+        objective_caps={"teacher_working_day": 0}))
+    assert capped.backend == "v1"
+    assert capped.v2_outcome == "infeasible"
+
+    # plain v1 solves never set an exact-optimizer outcome
+    from app.scheduler import solve
+    assert solve(d).v2_outcome is None
 
 
 def test_zero_time_budget_still_returns_valid_schedule():

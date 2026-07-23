@@ -559,6 +559,7 @@ def generate_schedule(opts: GenerateOptions,
         "complete": result.complete,
         "scheduled": len(result.lessons),
         "backend": result.backend,
+        "v2_outcome": result.v2_outcome,
         "unscheduled": [
             {"student_id": st, "subject_id": su, "missing": n}
             for (st, su, n) in result.unscheduled],
