@@ -620,6 +620,58 @@ def test_room_teacher_limit_via_api(client):
     assert "room_teacher_over_capacity" in codes
 
 
+def test_teacher_day_max_via_api(client):
+    """Teachers carry an optional daily lesson cap; the caution flow
+    treats a breach like any other violation, and renaming a teacher
+    without sending the field keeps the stored limit."""
+    seed_world(client)
+    client.post("/api/teachers", json={
+        "id": "t1", "name": "Tanaka", "max_lessons_per_day": 1})
+    rows = {t["id"]: t for t in client.get("/api/teachers").json()}
+    assert rows["t1"]["max_lessons_per_day"] == 1
+
+    base = {"subject_id": "math", "teacher_id": "t1", "room_id": "r1"}
+    assert client.post("/api/lessons", json=dict(
+        base, student_id="s1", timeslot_id="mon-1")).status_code == 200
+    r = client.post("/api/lessons", json=dict(
+        base, student_id="s2", timeslot_id="mon-2"))
+    assert r.status_code == 409
+    assert any(v["code"] == "teacher_day_overload"
+               for v in r.json()["detail"]["violations"])
+    r = client.post("/api/lessons", json=dict(
+        base, student_id="s2", timeslot_id="mon-2", force=True))
+    assert r.status_code == 200
+    codes = [v["code"] for v in
+             client.get("/api/schedule").json()["violations"]]
+    assert "teacher_day_overload" in codes
+
+    # rename without the field: the limit must survive
+    client.post("/api/teachers", json={"id": "t1", "name": "Tanaka K."})
+    rows = {t["id"]: t for t in client.get("/api/teachers").json()}
+    assert rows["t1"] == {"id": "t1", "name": "Tanaka K.",
+                          "max_lessons_per_day": 1}
+
+
+def test_old_db_gains_teacher_day_max_column(tmp_path):
+    """Teachers tables from before the daily cap existed are migrated
+    in place on startup (ALTER TABLE, default 0 = no limit)."""
+    import sqlite3 as s3
+    from app import db as appdb
+    db_path = tmp_path / "old_teachers.db"
+    conn = s3.connect(db_path)
+    with conn:
+        conn.execute("CREATE TABLE teachers (id TEXT PRIMARY KEY, "
+                     "name TEXT NOT NULL)")
+        conn.execute("INSERT INTO teachers VALUES ('t1', 'Tanaka')")
+    conn.close()
+    appdb.init_db(db_path)
+    conn = appdb.connect(db_path)
+    row = conn.execute("SELECT max_lessons_per_day FROM teachers "
+                       "WHERE id = 't1'").fetchone()
+    conn.close()
+    assert row["max_lessons_per_day"] == 0
+
+
 def test_old_db_gains_room_teacher_capacity_column(tmp_path):
     """DBs created before the room teacher limit existed are migrated
     in place on startup (ALTER TABLE, default 0 = no limit)."""

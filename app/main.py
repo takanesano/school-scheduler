@@ -98,7 +98,7 @@ class LinkIn(BaseModel):
     pass
 
 
-SIMPLE_TABLES = {"students", "teachers", "subjects"}
+SIMPLE_TABLES = {"students", "subjects"}
 
 
 def _rows(conn, sql, *params):
@@ -128,6 +128,41 @@ def _make_named_routes(table: str) -> None:
 
 for _t in sorted(SIMPLE_TABLES):
     _make_named_routes(_t)
+
+
+class TeacherIn(Named):
+    # max lessons on one calendar day; 0 = no limit. None = leave the
+    # stored value unchanged (so a rename never resets the limit).
+    max_lessons_per_day: int | None = Field(default=None, ge=0)
+
+
+@app.post("/api/teachers")
+def upsert_teacher(item: TeacherIn,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+    with conn:
+        if item.max_lessons_per_day is None:
+            conn.execute(
+                "INSERT INTO teachers (id, name) VALUES (?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET name=excluded.name",
+                (item.id, item.name))
+        else:
+            conn.execute(
+                "INSERT INTO teachers (id, name, max_lessons_per_day) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET name=excluded.name, "
+                "max_lessons_per_day=excluded.max_lessons_per_day",
+                (item.id, item.name, item.max_lessons_per_day))
+    return {"ok": True}
+
+
+@app.delete("/api/teachers/{item_id}")
+def delete_teacher(item_id: str,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+    with conn:
+        cur = conn.execute("DELETE FROM teachers WHERE id = ?", (item_id,))
+    if cur.rowcount == 0:
+        raise HTTPException(404, f"No such teacher '{item_id}'")
+    return {"ok": True}
 
 
 @app.post("/api/rooms")
@@ -447,8 +482,11 @@ def load_dataset(conn: sqlite3.Connection) -> Dataset:
     data = Dataset()
     for r in conn.execute("SELECT id, name FROM students"):
         data.students[r["id"]] = r["name"]
-    for r in conn.execute("SELECT id, name FROM teachers"):
+    for r in conn.execute(
+            "SELECT id, name, max_lessons_per_day FROM teachers"):
         data.teachers[r["id"]] = r["name"]
+        if r["max_lessons_per_day"]:
+            data.teacher_day_max[r["id"]] = r["max_lessons_per_day"]
     for r in conn.execute("SELECT id, name FROM subjects"):
         data.subjects[r["id"]] = r["name"]
     for r in conn.execute(

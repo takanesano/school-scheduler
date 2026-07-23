@@ -482,6 +482,10 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         load = (sum(by_teacher_day.get((t, date), []))
                 + pin_teacher_day.get((t, date), 0))
         m.Add(load <= cap_day * wd)
+        # H10: this teacher's own daily lesson cap (0/absent = no limit)
+        tdm = data.teacher_day_max.get(t, 0)
+        if tdm:
+            m.Add(load <= tdm)
         if pin_teacher_day.get((t, date), 0):
             m.Add(wd == 1)
         h_load = hint_td.get((t, date), 0)

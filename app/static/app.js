@@ -170,7 +170,10 @@ async function renderTeachers(root) {
       <input id="new-name" placeholder="name">
       <button class="action" id="add">Add / update</button>
     </div>
-    <table><thead><tr><th>ID</th><th>Name</th><th>Can teach</th><th></th></tr></thead>
+    <p class="muted">Max lessons/day = the most lessons that teacher takes
+      on one calendar day (0 = no limit).</p>
+    <table><thead><tr><th>ID</th><th>Name</th><th>Can teach</th>
+      <th>Max lessons/day</th><th></th></tr></thead>
     <tbody></tbody></table></div>`);
   const tbody = $("tbody", panel);
   for (const r of teachers) {
@@ -178,7 +181,21 @@ async function renderTeachers(root) {
       .map(id => subname[id] || id).sort().join(", ");
     const tr = el(`<tr><td>${esc(r.id)}</td><td>${esc(r.name)}</td>
       <td>${taught ? esc(taught) : '<span class="muted">— none yet —</span>'}</td>
+      <td><input type="number" min="0" max="99" class="inline-num"
+        value="${r.max_lessons_per_day}" data-daymax
+        title="0 = no limit"></td>
       <td><button class="small">delete</button></td></tr>`);
+    $("input[data-daymax]", tr).onchange = async (e) => {
+      const v = parseInt(e.target.value, 10);
+      if (!(v >= 0 && v <= 99)) {
+        return toast("max lessons/day must be 0-99", true);
+      }
+      try {
+        await api("POST", "/api/teachers",
+          { id: r.id, name: r.name, max_lessons_per_day: v });
+        render();   // schedule revalidates against the new limit
+      } catch (e2) { toast(e2.message, true); render(); }
+    };
     $("button", tr).onclick = async () => {
       if (!await appConfirm(`Delete ${r.id}? Related availability, subjects and lessons are removed too.`, "Delete")) return;
       await api("DELETE", `/api/teachers/${encodeURIComponent(r.id)}`).catch(e => toast(e.message, true));

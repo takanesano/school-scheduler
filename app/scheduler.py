@@ -80,6 +80,8 @@ class Dataset:
     rooms: dict[str, Room] = field(default_factory=dict)
     timeslots: dict[str, Timeslot] = field(default_factory=dict)
     teacher_subjects: set[tuple[str, str]] = field(default_factory=set)
+    # teacher id -> max lessons on one calendar day (absent = no limit)
+    teacher_day_max: dict[str, int] = field(default_factory=dict)
     student_needs: dict[tuple[str, str], int] = field(default_factory=dict)
     teacher_availability: set[tuple[str, str]] = field(default_factory=set)
     student_availability: set[tuple[str, str]] = field(default_factory=set)
@@ -202,6 +204,21 @@ def validate(data: Dataset, lessons: list[Lesson],
                     f"(max {tcap} teachers)",
                     *[l.id for l in ls])
 
+    # H10: per-teacher daily lesson cap (teachers.max_lessons_per_day;
+    # absent/0 = no limit)
+    by_teacher_date: dict[tuple[str, str], list[Lesson]] = defaultdict(list)
+    for l in known:
+        if data.teacher_day_max.get(l.teacher_id):
+            date = data.timeslots[l.timeslot_id].date
+            by_teacher_date[(l.teacher_id, date)].append(l)
+    for (t, date), ls in sorted(by_teacher_date.items()):
+        cap = data.teacher_day_max[t]
+        if len(ls) > cap:
+            bad("teacher_day_overload",
+                f"Teacher {data.teachers[t]} has {len(ls)} lessons on "
+                f"{date} (their max is {cap} per day)",
+                *[l.id for l in ls])
+
     # H8: per-student daily cap; multiple lessons must sit in one
     # contiguous run of periods when require_consecutive is on
     by_student_day: dict[tuple[str, str], list[Lesson]] = defaultdict(list)
@@ -298,6 +315,7 @@ class _State:
         self.room_teachers: Counter = Counter()      # (r, s) -> distinct t
         # (student, date) -> set of occupied period numbers
         self.student_day: dict[tuple[str, str], set[int]] = defaultdict(set)
+        self.teacher_day: Counter = Counter()        # (t, date) -> lessons
 
     def fits(self, st: str, su: str, t: str, r: str, s: str) -> bool:
         if self.teacher_load[(t, s)] >= self.teacher_capacity:
@@ -311,6 +329,9 @@ class _State:
                 and self.room_teachers[(r, s)] >= tcap):
             return False                       # H9: room's teacher limit
         slot = self.data.timeslots[s]
+        tdm = self.data.teacher_day_max.get(t)
+        if tdm and self.teacher_day[(t, slot.date)] >= tdm:
+            return False                       # H10: teacher's daily cap
         periods = self.student_day[(st, slot.date)]
         if len(periods) >= self.student_day_cap:
             return False                       # H8: daily cap reached
@@ -330,6 +351,7 @@ class _State:
             self.room_teachers[(l.room_id, l.timeslot_id)] += 1
         self.room_teacher[key] += 1
         slot = self.data.timeslots[l.timeslot_id]
+        self.teacher_day[(l.teacher_id, slot.date)] += 1
         self.student_day[(l.student_id, slot.date)].add(slot.period)
 
     def remove(self, l: Lesson) -> None:
@@ -342,6 +364,7 @@ class _State:
         if self.room_teacher[key] == 0:
             self.room_teachers[(l.room_id, l.timeslot_id)] -= 1
         slot = self.data.timeslots[l.timeslot_id]
+        self.teacher_day[(l.teacher_id, slot.date)] -= 1
         self.student_day[(l.student_id, slot.date)].discard(slot.period)
 
 

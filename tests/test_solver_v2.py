@@ -154,6 +154,7 @@ def test_incumbent_is_kept_when_budget_finds_nothing():
     r = solve_v2(d, config=tiny, incumbent=good.lessons)
     assert r.backend == "current"
     assert r.v2_outcome == "no_solution_in_budget"
+
     def key(ls):
         return sorted((l.student_id, l.subject_id, l.teacher_id,
                        l.room_id, l.timeslot_id) for l in ls)
@@ -459,6 +460,27 @@ def test_cpsat_respects_room_teacher_limit():
     assert r.complete
     assert validate(d, r.lessons) == []
     assert len({(l.room_id, l.timeslot_id) for l in r.lessons}) == 2
+
+
+def test_cpsat_respects_teacher_day_max():
+    """The reference pulls both lessons onto Monday, but t1's personal
+    daily cap of one lesson forces the CP model to split the days."""
+    d = make_data()
+    d.teachers = {"t1": "Tanaka"}
+    d.teacher_subjects = {("t1", "math"), ("t1", "eng")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.teacher_day_max = {"t1": 1}
+    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    reference = [Lesson("s1", "math", "t1", "r1", "mon-1"),
+                 Lesson("s2", "eng", "t1", "r1", "mon-2")]
+    cfg = SolverConfig(weights=ObjectiveWeights(
+        changed_lesson=100_000_000.0))
+    r = solve_v2(d, config=cfg, reference=reference)
+    assert r.backend == "cpsat"
+    assert r.complete
+    assert validate(d, r.lessons) == []
+    dates = {d.timeslots[l.timeslot_id].date for l in r.lessons}
+    assert len(dates) == 2
 
 
 def test_cpsat_higher_day_cap_contiguous_triple():

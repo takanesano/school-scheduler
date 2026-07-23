@@ -73,6 +73,19 @@ def test_parse_capacity_defaults_to_one():
                     "teacher_capacity": "0"}]
 
 
+def test_parse_teacher_day_max_defaults_to_zero():
+    got = csv_io.parse_csv("teachers", "id,name\nt1,Tanaka\n")
+    assert got == [{"id": "t1", "name": "Tanaka",
+                    "max_lessons_per_day": "0"}]
+
+
+def test_parse_bad_teacher_day_max():
+    with pytest.raises(csv_io.CsvError) as e:
+        csv_io.parse_csv(
+            "teachers", "id,name,max_lessons_per_day\nt1,Tanaka,-2\n")
+    assert "max_lessons_per_day" in e.value.errors[0]
+
+
 def test_parse_bad_teacher_capacity():
     with pytest.raises(csv_io.CsvError) as e:
         csv_io.parse_csv(
@@ -180,6 +193,7 @@ def test_import_needs_full_pipeline(conn):
 @pytest.mark.parametrize("entity,csv_text", [
     ("students", "id,name\ns1,Aoi\ns2,Ren\n"),
     ("rooms", "id,name,capacity,teacher_capacity\nr1,Room 1,2,6\n"),
+    ("teachers", "id,name,max_lessons_per_day\nt1,Tanaka,4\n"),
     ("timeslots", "id,date,period,label\nmon-1,2026-07-27,1,17:00\n"),
 ])
 def test_export_round_trip(conn, entity, csv_text):

@@ -20,7 +20,10 @@ CREATE TABLE IF NOT EXISTS students (
 
 CREATE TABLE IF NOT EXISTS teachers (
     id   TEXT PRIMARY KEY,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    -- max lessons this teacher takes on one calendar day; 0 = no limit
+    max_lessons_per_day INTEGER NOT NULL DEFAULT 0
+        CHECK (max_lessons_per_day >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS subjects (
@@ -113,3 +116,8 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE rooms ADD COLUMN teacher_capacity "
                      "INTEGER NOT NULL DEFAULT 0 "
                      "CHECK (teacher_capacity >= 0)")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(teachers)")}
+    if "max_lessons_per_day" not in cols:
+        conn.execute("ALTER TABLE teachers ADD COLUMN max_lessons_per_day "
+                     "INTEGER NOT NULL DEFAULT 0 "
+                     "CHECK (max_lessons_per_day >= 0)")
