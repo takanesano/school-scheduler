@@ -161,28 +161,26 @@ def _v1_pipeline(data: Dataset, config: SolverConfig,
 
 def solve_v2(data: Dataset, config: SolverConfig | None = None,
              fixed_lessons: list[Lesson] | None = None,
-             reference: list[Lesson] | None = None) -> SolveResult:
-    """Optimize the weighted cost directly; never worse than v1.
+             reference: list[Lesson] | None = None,
+             incumbent: list[Lesson] | None = None) -> SolveResult:
+    """Optimize the weighted cost directly; never worse than what the
+    user already has.
 
-    Returns the CP-SAT schedule only when it is fully valid, covers every
-    need exactly, and its ``weighted_cost`` is ≤ the v1 pipeline's.
-    Otherwise (OR-tools missing, model infeasible — e.g. force-saved
-    pinned lessons already violate a rule — or time budget too small) the
-    v1 result is returned; ``SolveResult.backend`` says which one won
-    and ``SolveResult.v2_outcome`` says WHY (proved optimal, improved,
-    nothing better found, no solution in budget, rules infeasible, …).
+    ``incumbent`` is the schedule that existed when the user hit
+    generate (manually built, or produced by an earlier run of either
+    solver). When it is fully valid and covers every need it becomes
+    the bar to beat: it warm-starts CP-SAT when it is better than the
+    fresh v1 attempt, and the best of {CP answer, incumbent, fresh v1}
+    by ``weighted_cost`` is returned — ties prefer the incumbent, so a
+    re-generate never reshuffles a schedule it cannot improve.
+    ``SolveResult.backend`` says which one won ("cpsat" / "current" /
+    "v1") and ``SolveResult.v2_outcome`` says WHY (proved optimal,
+    improved, nothing better found, no solution in budget, rules
+    infeasible, …).
     """
     config = config or SolverConfig()
     pinned = list(fixed_lessons or [])
     v1 = _v1_pipeline(data, config, pinned)
-    # warm start: the reference schedule (when rescheduling) or v1's
-    # answer — CP-SAT then spends its whole budget improving, and a
-    # timeout can rarely be worse than v1
-    hint = reference if reference is not None else v1.lessons
-    cp, cp_state = _solve_cpsat(data, config, pinned, reference, hint)
-    if cp is None:
-        v1.v2_outcome = cp_state       # unavailable / input_problem /
-        return v1                      # infeasible / no_solution_in_budget
 
     def fully_valid(lessons):
         return not (validate(data, lessons, config.teacher_capacity,
@@ -191,25 +189,62 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
                              config.objective_caps,
                              single_day_max=config.single_day_max)
                     or coverage_report(data, lessons))
-    if not fully_valid(cp.lessons):
-        v1.v2_outcome = "invalid_output"
-        return v1                      # backend misbehaved: v1 wins
-    # prefer v1 on cost only when v1 itself satisfies everything —
-    # including promoted objective caps, which v1 cannot enforce
+
     v1_usable = v1.complete and fully_valid(v1.lessons)
-    cp_cost = weighted_cost(data, cp.lessons, config, reference)
     v1_cost = (weighted_cost(data, v1.lessons, config, reference)
                if v1_usable else None)
-    if v1_usable and cp_cost > v1_cost:
-        v1.v2_outcome = "kept_v1"      # budget produced nothing better
-        return v1
-    if cp_state == "optimal":
-        cp.v2_outcome = "optimal"      # proved best possible
-    elif v1_usable and cp_cost == v1_cost:
-        cp.v2_outcome = "no_improvement"
+    inc_usable = bool(incumbent) and fully_valid(incumbent)
+    inc_cost = (weighted_cost(data, incumbent, config, reference)
+                if inc_usable else None)
+
+    # warm start: the reference schedule (when rescheduling), else the
+    # best schedule already known — CP-SAT then spends its whole budget
+    # improving on it
+    if reference is not None:
+        hint = reference
+    elif inc_usable and (v1_cost is None or inc_cost <= v1_cost):
+        hint = incumbent
     else:
-        cp.v2_outcome = "improved"
-    return cp
+        hint = v1.lessons
+    cp, cp_state = _solve_cpsat(data, config, pinned, reference, hint)
+    if cp is not None and not fully_valid(cp.lessons):
+        cp, cp_state = None, "invalid_output"   # backend misbehaved
+    cp_cost = (weighted_cost(data, cp.lessons, config, reference)
+               if cp is not None else None)
+
+    # pick the cheapest usable schedule; ties prefer the incumbent
+    # (no gratuitous reshuffling), then the CP answer
+    candidates = []
+    if inc_usable:
+        candidates.append((inc_cost, 0, "current"))
+    if cp is not None:
+        candidates.append((cp_cost, 1, "cpsat"))
+    if v1_usable:
+        candidates.append((v1_cost, 2, "v1"))
+    if not candidates:
+        v1.v2_outcome = cp_state       # best effort: v1's partial answer
+        return v1
+    _, _, winner = min(candidates)
+    prev_best = min((c for c in (inc_cost, v1_cost) if c is not None),
+                    default=None)
+
+    if winner == "cpsat":
+        if cp_state == "optimal":
+            cp.v2_outcome = "optimal"          # proved best possible
+        elif prev_best is None or cp_cost < prev_best:
+            cp.v2_outcome = "improved"
+        else:
+            cp.v2_outcome = "no_improvement"
+        return cp
+    if winner == "current":
+        outcome = ("optimal" if (cp is not None and cp_state == "optimal"
+                                 and cp_cost == inc_cost)
+                   else "kept_current" if cp is not None
+                   else cp_state)     # budget/infeasible/unavailable/…
+        return SolveResult(list(incumbent), [], complete=True,
+                           backend="current", v2_outcome=outcome)
+    v1.v2_outcome = "kept_v1" if cp is not None else cp_state
+    return v1
 
 
 def resolve_minimal_disruption(data: Dataset, current: list[Lesson],

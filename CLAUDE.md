@@ -166,8 +166,12 @@ weeks and marks non-term days `in_term: false`.
 
 - `app/solver_v2.py` is the IMPLEMENTED weight-driven CP-SAT solver
   (docs/solver-v2-plan.md). Key invariants: `solve_v2` always runs the
-  v1 pipeline too and only returns the CP answer when it passes
-  validate+coverage AND has weighted_cost ≤ v1's. Two budget modes
+  v1 pipeline too and returns the cheapest fully-valid schedule among
+  {CP answer, `incumbent`, fresh v1} — `incumbent` is the schedule
+  that existed when the user clicked generate (the endpoint passes
+  load_lessons); ties prefer the incumbent (backend "current", never
+  reshuffle what you can't beat), and the better of incumbent/v1 is
+  the warm-start hint. Two budget modes
   (`SolverConfig.num_workers`): 1 worker (default, used by tests and
   resolve flows) is DETERMINISTIC via `max_deterministic_time`;
   the generate endpoint uses num_workers=8 + wall-clock

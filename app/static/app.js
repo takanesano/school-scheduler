@@ -853,37 +853,42 @@ async function renderSchedule(root) {
     optimal: ["ok", "The exact optimizer PROVED this is the best "
       + "possible schedule for the current rules and priorities."],
     improved: ["ok", "The exact optimizer found a better schedule than "
-      + "the standard solver. The budget ran out before proving it "
-      + "optimal — a bigger budget might improve it further."],
+      + "the one you started from. The budget ran out before proving "
+      + "it optimal — a bigger budget might improve it further."],
     no_improvement: ["warn", "The exact optimizer searched its whole "
       + "budget but found nothing better than the standard solver's "
       + "schedule. A bigger budget might do better."],
+    kept_current: ["warn", "The exact optimizer found nothing better "
+      + "than the schedule you already had — it was kept unchanged. A "
+      + "bigger budget might do better."],
     kept_v1: ["warn", "The exact optimizer found nothing better within "
       + "its budget — the standard solver's schedule was kept. A bigger "
       + "budget might do better."],
     no_solution_in_budget: ["warn", "The exact optimizer ran out of "
-      + "budget before finding any usable schedule — the standard "
-      + "solver's schedule is shown instead. Try a bigger budget; if "
-      + "the Status panel reports always-active rule violations, those "
-      + "rules may be too strict to satisfy at all."],
+      + "budget before finding any usable schedule, so the best "
+      + "schedule already known was kept (see above). Try a bigger "
+      + "budget; if the Status panel reports always-active rule "
+      + "violations, those rules may be too strict to satisfy at all."],
     infeasible: ["bad", "No schedule can satisfy all the rules: the "
-      + "always-active bounds are impossible with the current inputs. "
-      + "The standard solver's best attempt is shown — relax an "
-      + "always-active bound or adjust the inputs."],
+      + "always-active bounds are impossible with the current inputs — "
+      + "relax an always-active bound or adjust the inputs. The best "
+      + "schedule already known was kept (see above)."],
     invalid_output: ["warn", "The exact optimizer produced an invalid "
-      + "schedule — the standard solver's schedule was kept."],
+      + "schedule — the best schedule already known was kept."],
     unavailable: ["warn", "The exact optimizer is unavailable (the "
       + "ortools package is not installed) — the standard solver was "
       + "used."],
     input_problem: ["warn", "Input problems prevent exact optimization "
       + "— the standard solver's result is shown."],
   };
+  const BACKEND_LABEL = { cpsat: "exact optimizer",
+                          v1: "standard solver",
+                          current: "your previous schedule, kept" };
   if (state.lastGen) {
     const res = state.lastGen;
     const head = res.complete
       ? `Last run: complete schedule — ${res.scheduled} lessons (`
-        + (res.backend === "cpsat" ? "exact optimizer" : "standard solver")
-        + ")."
+        + (BACKEND_LABEL[res.backend] || res.backend) + ")."
       : `Last run: partial schedule — ${res.scheduled} lessons placed, `
         + `${(res.unscheduled || []).length} need(s) unscheduled.`;
     const box = el(`<div class="gen-outcome"><div>${esc(head)}</div></div>`);

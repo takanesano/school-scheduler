@@ -102,10 +102,12 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   seconds, configurable), so generation takes roughly that long — but
   the result is usually much better: on the large sample term two
   minutes of budget roughly halves the teacher working days and
-  eliminates single-lesson days entirely. It automatically falls back
-  to the standard solver when it cannot do better (its output is
-  always re-checked by the same validator). Requires the optional
-  `ortools` dependency.
+  eliminates single-lesson days entirely. The schedule that existed
+  when you clicked Generate is the bar to beat: if the optimizer finds
+  nothing better within its budget, your existing schedule (hand-tuned
+  or from an earlier run) is kept unchanged rather than replaced (its
+  output is always re-checked by the same validator). Requires the
+  optional `ortools` dependency.
 
 ## Using the web interface
 
