@@ -372,6 +372,25 @@ def test_cpsat_enforces_single_day_threshold_cap():
     assert days == {"2026-07-27"}                 # everything on Monday
 
 
+def test_cpsat_respects_room_teacher_limit():
+    """The reference pulls both lessons into mon-1 (dominating
+    changed_lesson weight), but the room admits only one teacher per
+    slot — the CP model must deviate instead of matching it."""
+    d = make_data()
+    d.rooms = {"r1": Room("r1", "Room 1", 2, teacher_capacity=1)}
+    d.teacher_subjects = {("t1", "math"), ("t2", "eng")}
+    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    reference = [Lesson("s1", "math", "t1", "r1", "mon-1"),
+                 Lesson("s2", "eng", "t2", "r1", "mon-1")]
+    cfg = SolverConfig(weights=ObjectiveWeights(
+        changed_lesson=100_000_000.0))
+    r = solve_v2(d, config=cfg, reference=reference)
+    assert r.backend == "cpsat"
+    assert r.complete
+    assert validate(d, r.lessons) == []
+    assert len({(l.room_id, l.timeslot_id) for l in r.lessons}) == 2
+
+
 def test_cpsat_higher_day_cap_contiguous_triple():
     d = make_data(n_slots_per_day=4, days=("Mon",))
     d.subjects["sci"] = "Science"

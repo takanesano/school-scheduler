@@ -245,16 +245,22 @@ async function renderRooms(root) {
       <input id="new-id" placeholder="id (e.g. r1)">
       <input id="new-name" placeholder="name">
       <input id="new-cap" type="number" min="1" value="1" style="width:6rem" title="capacity">
+      <input id="new-tcap" type="number" min="0" value="0" style="width:6rem"
+        title="teacher limit (0 = no limit)">
       <button class="action" id="add">Add / update</button>
     </div>
     <p class="muted">Capacity = how many simultaneous lessons fit in the room
-      (e.g. booths in one open room).</p>
-    <table><thead><tr><th>ID</th><th>Name</th><th>Capacity</th><th></th></tr></thead>
+      (e.g. booths in one open room). Teacher limit = how many different
+      teachers may be in the room at the same time (0 = no limit).</p>
+    <table><thead><tr><th>ID</th><th>Name</th><th>Capacity</th>
+      <th>Teacher limit</th><th></th></tr></thead>
     <tbody></tbody></table></div>`);
   const tbody = $("tbody", panel);
   for (const r of rows) {
     const tr = el(`<tr><td>${esc(r.id)}</td><td>${esc(r.name)}</td>
-      <td>${r.capacity}</td><td><button class="small">delete</button></td></tr>`);
+      <td>${r.capacity}</td>
+      <td>${r.teacher_capacity || "—"}</td>
+      <td><button class="small">delete</button></td></tr>`);
     $("button", tr).onclick = async () => {
       if (!await appConfirm(`Delete room ${r.id}?`, "Delete")) return;
       await api("DELETE", `/api/rooms/${encodeURIComponent(r.id)}`).catch(e => toast(e.message, true));
@@ -266,9 +272,13 @@ async function renderRooms(root) {
     const id = $("#new-id", panel).value.trim();
     const name = $("#new-name", panel).value.trim();
     const capacity = parseInt($("#new-cap", panel).value, 10);
+    const teacher_capacity = parseInt($("#new-tcap", panel).value, 10);
     if (!id || !name || !(capacity >= 1)) return toast("id, name and capacity ≥ 1 required", true);
-    try { await api("POST", "/api/rooms", { id, name, capacity }); render(); }
-    catch (e) { toast(e.message, true); }
+    if (!(teacher_capacity >= 0)) return toast("teacher limit must be 0 or more", true);
+    try {
+      await api("POST", "/api/rooms", { id, name, capacity, teacher_capacity });
+      render();
+    } catch (e) { toast(e.message, true); }
   };
   root.append(panel);
 }
@@ -603,7 +613,8 @@ async function renderSchedule(root) {
             <ul class="locked-rules">
               <li>🔒 teachers teach only their subjects, only when available</li>
               <li>🔒 students only when available; one lesson per timeslot</li>
-              <li>🔒 room capacity is never exceeded</li>
+              <li>🔒 room capacity (and its teacher limit, if set) is
+                never exceeded</li>
               <li>🔒 a teacher teaches at most ${settings.teacher_capacity}
                 students per timeslot</li>
               <li>🔒 a student has at most ${settings.student_day_cap} lessons

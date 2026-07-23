@@ -23,7 +23,7 @@ SPECS: dict[str, list[str]] = {
     "students": ["id", "name"],
     "teachers": ["id", "name"],
     "subjects": ["id", "name"],
-    "rooms": ["id", "name", "capacity"],
+    "rooms": ["id", "name", "capacity", "teacher_capacity"],
     "timeslots": ["id", "date", "period", "label"],
     "teacher_subjects": ["teacher_id", "subject_id"],
     "student_needs": ["student_id", "subject_id", "sessions"],
@@ -32,7 +32,8 @@ SPECS: dict[str, list[str]] = {
 }
 
 OPTIONAL: dict[str, set[str]] = {
-    "rooms": {"capacity"},      # defaults to 1
+    # capacity defaults to 1; teacher_capacity to 0 = no teacher limit
+    "rooms": {"capacity", "teacher_capacity"},
     "timeslots": {"label"},     # defaults to ''
 }
 
@@ -75,7 +76,8 @@ def parse_csv(entity: str, text: str) -> list[dict[str, str]]:
         for c in cols:
             val = row.get(c, "")
             if not val and c in optional:
-                val = {"capacity": "1", "label": ""}[c]
+                val = {"capacity": "1", "label": "",
+                       "teacher_capacity": "0"}[c]
             if not val and c not in optional:
                 errors.append(f"Line {lineno}: '{c}' is empty")
                 row_ok = False
@@ -87,6 +89,12 @@ def parse_csv(entity: str, text: str) -> list[dict[str, str]]:
         if "capacity" in out and not _is_pos_int(out["capacity"]):
             errors.append(f"Line {lineno}: capacity must be a positive "
                           f"integer, got '{out['capacity']}'")
+            continue
+        if ("teacher_capacity" in out
+                and not _is_nonneg_int(out["teacher_capacity"])):
+            errors.append(f"Line {lineno}: teacher_capacity must be a "
+                          f"non-negative integer (0 = no limit), got "
+                          f"'{out['teacher_capacity']}'")
             continue
         if "period" in out and not _is_pos_int(out["period"]):
             errors.append(f"Line {lineno}: period must be a positive "
@@ -123,6 +131,13 @@ def _key_columns(entity: str) -> list[str]:
 def _is_pos_int(v: str) -> bool:
     try:
         return int(v) >= 1
+    except ValueError:
+        return False
+
+
+def _is_nonneg_int(v: str) -> bool:
+    try:
+        return int(v) >= 0
     except ValueError:
         return False
 

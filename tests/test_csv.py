@@ -69,7 +69,15 @@ def test_parse_bad_capacity():
 
 def test_parse_capacity_defaults_to_one():
     got = csv_io.parse_csv("rooms", "id,name\nr1,Room\n")
-    assert got == [{"id": "r1", "name": "Room", "capacity": "1"}]
+    assert got == [{"id": "r1", "name": "Room", "capacity": "1",
+                    "teacher_capacity": "0"}]
+
+
+def test_parse_bad_teacher_capacity():
+    with pytest.raises(csv_io.CsvError) as e:
+        csv_io.parse_csv(
+            "rooms", "id,name,capacity,teacher_capacity\nr1,Room,2,-1\n")
+    assert "teacher_capacity" in e.value.errors[0]
 
 
 @pytest.mark.parametrize("bad", ["Monday", "2026/07/27", "2026-13-01",
@@ -171,7 +179,7 @@ def test_import_needs_full_pipeline(conn):
 
 @pytest.mark.parametrize("entity,csv_text", [
     ("students", "id,name\ns1,Aoi\ns2,Ren\n"),
-    ("rooms", "id,name,capacity\nr1,Room 1,2\n"),
+    ("rooms", "id,name,capacity,teacher_capacity\nr1,Room 1,2,6\n"),
     ("timeslots", "id,date,period,label\nmon-1,2026-07-27,1,17:00\n"),
 ])
 def test_export_round_trip(conn, entity, csv_text):
