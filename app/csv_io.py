@@ -21,7 +21,7 @@ class CsvError(Exception):
 # entity -> (columns, required columns)
 SPECS: dict[str, list[str]] = {
     "students": ["id", "name"],
-    "teachers": ["id", "name"],
+    "teachers": ["id", "name", "max_lessons_per_day"],
     "subjects": ["id", "name"],
     "rooms": ["id", "name", "capacity", "teacher_capacity"],
     "timeslots": ["id", "date", "period", "label"],
@@ -34,6 +34,7 @@ SPECS: dict[str, list[str]] = {
 OPTIONAL: dict[str, set[str]] = {
     # capacity defaults to 1; teacher_capacity to 0 = no teacher limit
     "rooms": {"capacity", "teacher_capacity"},
+    "teachers": {"max_lessons_per_day"},   # 0 = no daily limit
     "timeslots": {"label"},     # defaults to ''
 }
 
@@ -77,7 +78,8 @@ def parse_csv(entity: str, text: str) -> list[dict[str, str]]:
             val = row.get(c, "")
             if not val and c in optional:
                 val = {"capacity": "1", "label": "",
-                       "teacher_capacity": "0"}[c]
+                       "teacher_capacity": "0",
+                       "max_lessons_per_day": "0"}[c]
             if not val and c not in optional:
                 errors.append(f"Line {lineno}: '{c}' is empty")
                 row_ok = False
@@ -95,6 +97,12 @@ def parse_csv(entity: str, text: str) -> list[dict[str, str]]:
             errors.append(f"Line {lineno}: teacher_capacity must be a "
                           f"non-negative integer (0 = no limit), got "
                           f"'{out['teacher_capacity']}'")
+            continue
+        if ("max_lessons_per_day" in out
+                and not _is_nonneg_int(out["max_lessons_per_day"])):
+            errors.append(f"Line {lineno}: max_lessons_per_day must be a "
+                          f"non-negative integer (0 = no limit), got "
+                          f"'{out['max_lessons_per_day']}'")
             continue
         if "period" in out and not _is_pos_int(out["period"]):
             errors.append(f"Line {lineno}: period must be a positive "

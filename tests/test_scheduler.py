@@ -162,6 +162,45 @@ def test_room_teacher_limit_zero_means_no_limit():
     assert vs == []
 
 
+def test_teacher_day_max_violated_by_second_lesson():
+    d = make_data()
+    d.teacher_day_max = {"t1": 1}
+    vs = validate(d, [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+                      Lesson("s2", "eng", "t1", "r1", "mon-2", id=2)])
+    assert codes(vs) == ["teacher_day_overload"]
+
+
+def test_teacher_day_max_absent_means_no_limit():
+    d = make_data()   # no teacher_day_max entries
+    vs = validate(d, [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+                      Lesson("s2", "eng", "t1", "r1", "mon-2", id=2)])
+    assert vs == []
+
+
+def test_teacher_day_max_at_limit_is_fine():
+    d = make_data()
+    d.teacher_day_max = {"t1": 2}
+    vs = validate(d, [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+                      Lesson("s2", "eng", "t1", "r1", "mon-2", id=2)])
+    assert vs == []
+
+
+def test_solver_respects_teacher_day_max():
+    """t1 may take only one lesson per day, so the two lessons (which
+    would otherwise both land on Monday) must go on different dates."""
+    d = make_data()
+    d.teachers = {"t1": "Tanaka"}
+    d.teacher_subjects = {("t1", "math"), ("t1", "eng")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.teacher_day_max = {"t1": 1}
+    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    r = solve(d)
+    assert r.complete
+    assert validate(d, r.lessons) == []
+    dates = {d.timeslots[l.timeslot_id].date for l in r.lessons}
+    assert len(dates) == 2
+
+
 def test_solver_respects_room_teacher_limit():
     """Both lessons need different teachers; the room takes only one
     teacher per slot, so the solver must split them across slots (it

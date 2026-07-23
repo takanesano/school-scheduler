@@ -57,6 +57,8 @@ A generated schedule always satisfies these hard constraints:
    in the room at the same time (0 = no limit).
 5. A student has at most **two lessons per calendar day**, and when there
    are two they must be in **consecutive periods** (no gap in between).
+6. A teacher never exceeds their own **max lessons per day**, when one
+   is set on the Teachers tab (0 = no limit).
 
 After solving, an optimization pass (on by default, toggleable) improves
 the soft objectives without changing who learns what, in strict priority
@@ -152,7 +154,7 @@ student also removes their availability, needs, and lessons).
 | File | Header |
 | --- | --- |
 | `students.csv` | `id,name` |
-| `teachers.csv` | `id,name` |
+| `teachers.csv` | `id,name,max_lessons_per_day` (max_lessons_per_day optional: daily lesson cap, 0 = no limit) |
 | `subjects.csv` | `id,name` |
 | `rooms.csv` | `id,name,capacity,teacher_capacity` (teacher_capacity optional: max distinct teachers per timeslot, 0 = no limit) |
 | `timeslots.csv` | `id,date,period,label` (date: `YYYY-MM-DD`; label optional, e.g. `09:00-10:10`) |

@@ -52,6 +52,15 @@ weeks and marks non-term days `in_term: false`.
   `_State.fits` (refcounted (room, slot, teacher) sets), and the CP
   model (per-teacher presence bools `rt[...]`, x ≤ y, Σy ≤ cap; pinned
   teachers are constants). Per-room DATA, not a settings-table entry.
+- H10 is the PER-TEACHER DAILY CAP: `teachers.max_lessons_per_day`
+  (0/absent = no limit; migrated like H9), loaded into
+  `Dataset.teacher_day_max` (only positive entries). Code
+  `teacher_day_overload`; enforced in validate, `_State.fits`
+  (teacher_day Counter), and the CP model (`load <= tdm` per
+  teacher-day). Edited inline in the Teachers tab table; POST
+  /api/teachers omitting the field keeps the stored value (renames
+  must not reset it — dedicated TeacherIn route, teachers are no
+  longer in SIMPLE_TABLES).
 - H8 is the STUDENT DAY rule (always on; the old optional per-subject
   spread flag `one_subject_session_per_day` is GONE from every signature
   and the API): max two lessons per student per calendar day
