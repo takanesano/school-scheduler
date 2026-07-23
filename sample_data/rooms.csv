@@ -1,2 +1,2 @@
-id,name,capacity
-hall,Main Hall,12
+id,name,capacity,teacher_capacity
+hall,Main Hall,12,6
