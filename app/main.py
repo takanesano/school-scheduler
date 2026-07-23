@@ -4,16 +4,17 @@ Run locally with:  .venv/bin/uvicorn app.main:app --reload
 """
 from __future__ import annotations
 
+import datetime
 import json
 import sqlite3
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import csv_io, db, views
+from . import csv_io, db, print_pdf, views
 from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, Room, Timeslot,
                         check_input_problems, coverage_report,
                         optimize_teacher_days, schedule_objective, solve,
@@ -817,6 +818,91 @@ def view_teacher(teacher_id: str,
             load_dataset(conn), load_lessons(conn), teacher_id)
     except KeyError:
         raise HTTPException(404, f"No such teacher '{teacher_id}'")
+
+
+# --------------------------------------------------------------- PDF handouts
+
+def _iso_or_422(value: str | None, name: str) -> str | None:
+    if value is None:
+        return None
+    try:
+        return datetime.date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise HTTPException(422, f"{name} must be YYYY-MM-DD")
+
+
+def _pdf_response(content: bytes, filename: str) -> Response:
+    return Response(content=content, media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             f'inline; filename="{filename}"'})
+
+
+def _now_stamp() -> str:
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _ids_or_all(ids: str | None, known: dict, kind: str,
+                sort_key) -> list[str]:
+    if ids is None:
+        return sorted(known, key=sort_key)
+    out = [i.strip() for i in ids.split(",") if i.strip()]
+    missing = [i for i in out if i not in known]
+    if missing:
+        raise HTTPException(404, f"No such {kind}: {', '.join(missing)}")
+    return out
+
+
+@app.get("/api/print/overview.pdf")
+def print_overview(date_from: str | None = None,
+                   date_to: str | None = None,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+    date_from, date_to = (_iso_or_422(date_from, "date_from"),
+                          _iso_or_422(date_to, "date_to"))
+    data = load_dataset(conn)
+    view = print_pdf.clip_view(
+        views.build_overview(data, load_lessons(conn)), date_from, date_to)
+    return _pdf_response(print_pdf.overview_pdf(view, _now_stamp()),
+                         "schedule-overview.pdf")
+
+
+@app.get("/api/print/students.pdf")
+def print_students(ids: str | None = None,
+                   date_from: str | None = None,
+                   date_to: str | None = None,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+    date_from, date_to = (_iso_or_422(date_from, "date_from"),
+                          _iso_or_422(date_to, "date_to"))
+    data = load_dataset(conn)
+    lessons = load_lessons(conn)
+    wanted = _ids_or_all(ids, data.students, "student",
+                         lambda s: data.students[s])
+    vs = [print_pdf.clip_view(
+        views.build_student_view(data, lessons, s), date_from, date_to)
+        for s in wanted]
+    if not vs:
+        raise HTTPException(404, "No students to print")
+    return _pdf_response(print_pdf.students_pdf(vs, _now_stamp()),
+                         "schedule-students.pdf")
+
+
+@app.get("/api/print/teachers.pdf")
+def print_teachers(ids: str | None = None,
+                   date_from: str | None = None,
+                   date_to: str | None = None,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+    date_from, date_to = (_iso_or_422(date_from, "date_from"),
+                          _iso_or_422(date_to, "date_to"))
+    data = load_dataset(conn)
+    lessons = load_lessons(conn)
+    wanted = _ids_or_all(ids, data.teachers, "teacher",
+                         lambda t: data.teachers[t])
+    vs = [print_pdf.clip_view(
+        views.build_teacher_view(data, lessons, t), date_from, date_to)
+        for t in wanted]
+    if not vs:
+        raise HTTPException(404, "No teachers to print")
+    return _pdf_response(print_pdf.teachers_pdf(vs, _now_stamp()),
+                         "schedule-teachers.pdf")
 
 
 # Generic listing endpoint — registered LAST so fixed paths like

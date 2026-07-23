@@ -1438,11 +1438,28 @@ async function renderCalendars(root) {
         `<option value="${esc(p.id)}"${p.id === state.calPerson ? " selected" : ""}>
          ${esc(p.name)} (${esc(p.id)})</option>`).join("")}</select>` : ""}
       <button class="action secondary" id="cal-print">Print</button>
+    </div>
+    <div class="row pdf-row">
+      <span class="muted">PDF handouts (A4 landscape, Japanese):</span>
+      <a class="action secondary" id="pdf-this" href="#" hidden>this view</a>
+      <a class="action secondary" href="/api/print/overview.pdf"
+        target="_blank">overview</a>
+      <a class="action secondary" href="/api/print/students.pdf"
+        target="_blank">all students</a>
+      <a class="action secondary" href="/api/print/teachers.pdf"
+        target="_blank">all teachers</a>
     </div></div>`);
   $("#cal-view", ctrl).onchange = (e) => { state.calView = e.target.value; render(); };
   const personSel = $("#cal-person", ctrl);
   if (personSel) personSel.onchange = (e) => { state.calPerson = e.target.value; render(); };
   $("#cal-print", ctrl).onclick = () => window.print();
+  // "this view" PDF: the selected student's/teacher's single handout
+  const pdfThis = $("#pdf-this", ctrl);
+  if (view !== "overview" && state.calPerson) {
+    pdfThis.hidden = false;
+    pdfThis.href = `/api/print/${view}s.pdf?ids=${encodeURIComponent(state.calPerson)}`;
+    pdfThis.target = "_blank";
+  }
   root.append(ctrl);
 
   let url = "/api/views/overview";

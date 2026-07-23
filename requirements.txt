@@ -4,3 +4,4 @@ python-multipart
 pytest
 httpx
 ortools   # optional: exact CP-SAT backend for solver v2 (app runs without it)
+fpdf2     # PDF handout generation (/api/print/*.pdf)

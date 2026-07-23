@@ -74,6 +74,19 @@ button.action.secondary {
   background: var(--panel);
   color: var(--accent);
 }
+/* anchor styled like a secondary action button (PDF download links) */
+a.action.secondary {
+  display: inline-block;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+  color: var(--accent);
+  border-radius: 5px;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+a.action.secondary[hidden] { display: none; }
+.pdf-row { margin-top: 0.4rem; align-items: center; }
 button.small {
   padding: 0.15rem 0.5rem;
   font-size: 0.8rem;

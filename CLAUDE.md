@@ -130,6 +130,15 @@ weeks and marks non-term days `in_term: false`.
   served under `/api/views/...`, rendered by the Calendars tab (and the
   Schedule tab's timetable, via overview + `lesson_id`) with print CSS.
   New `/api/...` fixed paths must be registered before `GET /api/{entity}`.
+- PDF handouts (`app/print_pdf.py`, endpoints `/api/print/*.pdf` in
+  main.py, links in the Calendars tab): PURE layout module — consumes
+  the views.py week-grid dicts plus explicit metadata (generated-at
+  stamp comes from the endpoint), returns bytes; A4 landscape,
+  Japanese labels, batch docs = one page per person, every footer =
+  term span + generated-at + page n/N. `clip_view` restricts to a date
+  range. Font: bundled `app/static/fonts/NotoSansJP-Regular.ttf`
+  (OFL); fpdf2 is a hard dependency. Browser print (window.print + CSS)
+  stays as the quick-draft path.
 - Sample data is generated (two-week summer term 2026-07-27…2026-08-08);
   slot ids look like `0727-1` (= MMDD-period). `POST /api/timeslots/bulk`
   mass-creates slots for a date range × weekdays × periods; it skips
