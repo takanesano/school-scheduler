@@ -143,6 +143,64 @@ def test_parallel_mode_returns_valid_gated_result():
     assert len(r.lessons) == 30
 
 
+def test_incumbent_is_kept_when_budget_finds_nothing():
+    """The bar to beat is the schedule that existed when the user hit
+    generate. With a budget too small to find anything, a re-generate
+    must return that schedule untouched — not a fresh v1 attempt."""
+    d = medium_dataset()
+    good = solve_v2(d, config=FAST)
+    assert good.backend == "cpsat"
+    tiny = SolverConfig(deterministic_time=1e-9, time_limit_seconds=1e-9)
+    r = solve_v2(d, config=tiny, incumbent=good.lessons)
+    assert r.backend == "current"
+    assert r.v2_outcome == "no_solution_in_budget"
+    def key(ls):
+        return sorted((l.student_id, l.subject_id, l.teacher_id,
+                       l.room_id, l.timeslot_id) for l in ls)
+    assert key(r.lessons) == key(good.lessons)
+
+
+def test_incumbent_kept_and_proved_optimal_on_tie():
+    """When CP-SAT proves a cost the incumbent already achieves, the
+    incumbent is kept (no gratuitous reshuffle) and reported optimal."""
+    d = make_data()
+    d.student_needs = {("s1", "math"): 1}
+    inc = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1)]
+    r = solve_v2(d, incumbent=inc)
+    assert r.backend == "current"
+    assert r.v2_outcome == "optimal"
+    assert [(l.timeslot_id, l.teacher_id) for l in r.lessons] == \
+        [("mon-1", "t1")]
+
+
+def test_invalid_incumbent_is_ignored():
+    """An incumbent that no longer covers the needs (inputs changed,
+    manual edits) must not block a real solve."""
+    d = make_data()
+    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    stale = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1)]  # s2 missing
+    r = solve_v2(d, incumbent=stale)
+    assert r.backend == "cpsat"
+    assert r.complete
+    assert coverage_report(d, r.lessons) == []
+
+
+def test_poor_incumbent_is_beaten():
+    """A valid but improvable incumbent (teacher split over two days)
+    is replaced by the better CP answer."""
+    d = make_data()
+    d.teachers = {"t1": "Tanaka"}
+    d.teacher_subjects = {("t1", "math"), ("t1", "eng")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    inc = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+           Lesson("s2", "eng", "t1", "r1", "tue-1", id=2)]   # 2 days
+    r = solve_v2(d, incumbent=inc)
+    assert r.backend == "cpsat"
+    assert r.v2_outcome in ("optimal", "improved")
+    assert objective_terms(d, r.lessons)["teacher_working_day"] == 1
+
+
 def test_cpsat_is_deterministic():
     d = medium_dataset()
     assert solve_v2(d, config=FAST).lessons == \

@@ -272,7 +272,7 @@ class SolveResult:
     unscheduled: list[tuple[str, str, int]]  # (student, subject, missing count)
     complete: bool
     nodes_explored: int = 0
-    backend: str = "v1"                      # which solver produced this
+    backend: str = "v1"      # "v1" | "cpsat" | "current" (kept incumbent)
     # what the exact optimizer did (None unless solve_v2 was asked):
     # optimal | improved | no_improvement | kept_v1 |
     # no_solution_in_budget | infeasible | invalid_output | unavailable

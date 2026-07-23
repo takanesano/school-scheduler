@@ -363,6 +363,26 @@ def test_generate_v1_has_no_v2_outcome(client):
     assert body["v2_outcome"] is None
 
 
+def test_generate_v2_keeps_existing_schedule_it_cannot_beat(client):
+    """The bar to beat is the schedule present when generate is
+    clicked: a hand-placed lesson at an unusual slot (mon-2, where a
+    fresh solve would pick mon-1) survives a re-generate because no
+    schedule is cheaper."""
+    pytest.importorskip("ortools")
+    seed_world(client)
+    client.post("/api/student_needs", json={
+        "student_id": "s1", "subject_id": "math", "sessions": 1})
+    client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-2"})
+    body = client.post("/api/schedule/generate",
+                       json={"solver": "v2"}).json()
+    assert body["backend"] == "current"
+    assert body["v2_outcome"] == "optimal"
+    lessons = client.get("/api/schedule").json()["lessons"]
+    assert [l["timeslot_id"] for l in lessons] == ["mon-2"]
+
+
 def test_generate_rejects_unknown_solver(client):
     r = client.post("/api/schedule/generate", json={"solver": "v3"})
     assert r.status_code == 422

@@ -518,7 +518,8 @@ def generate_schedule(opts: GenerateOptions,
                  + ", ".join(OBJECTIVE_TERMS))
     data = load_dataset(conn)
     problems = check_input_problems(data)
-    fixed = load_lessons(conn) if opts.keep_existing else []
+    existing = load_lessons(conn)
+    fixed = existing if opts.keep_existing else []
     s = get_settings(conn)
     if opts.solver == "v2":
         # exact CP-SAT optimization; validates its own output and falls
@@ -536,7 +537,11 @@ def generate_schedule(opts: GenerateOptions,
             weights=ObjectiveWeights.lexicographic(order),
             num_workers=8,
             time_limit_seconds=opts.v2_time_budget)
-        result = solve_v2(data, config=cfg, fixed_lessons=fixed)
+        # the schedule that existed when the user clicked generate is
+        # the bar to beat — a re-generate must never lose a good
+        # (possibly hand-tuned or long-optimized) schedule
+        result = solve_v2(data, config=cfg, fixed_lessons=fixed,
+                          incumbent=existing)
     else:
         result = solve(data, fixed_lessons=fixed,
                        teacher_capacity=s["teacher_capacity"],
