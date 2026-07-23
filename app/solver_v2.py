@@ -161,7 +161,9 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
     need exactly, and its ``weighted_cost`` is ≤ the v1 pipeline's.
     Otherwise (OR-tools missing, model infeasible — e.g. force-saved
     pinned lessons already violate a rule — or time budget too small) the
-    v1 result is returned; ``SolveResult.backend`` says which one won.
+    v1 result is returned; ``SolveResult.backend`` says which one won
+    and ``SolveResult.v2_outcome`` says WHY (proved optimal, improved,
+    nothing better found, no solution in budget, rules infeasible, …).
     """
     config = config or SolverConfig()
     pinned = list(fixed_lessons or [])
@@ -170,9 +172,10 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
     # answer — CP-SAT then spends its whole budget improving, and a
     # timeout can rarely be worse than v1
     hint = reference if reference is not None else v1.lessons
-    cp = _solve_cpsat(data, config, pinned, reference, hint)
+    cp, cp_state = _solve_cpsat(data, config, pinned, reference, hint)
     if cp is None:
-        return v1
+        v1.v2_outcome = cp_state       # unavailable / input_problem /
+        return v1                      # infeasible / no_solution_in_budget
 
     def fully_valid(lessons):
         return not (validate(data, lessons, config.teacher_capacity,
@@ -182,13 +185,23 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
                              single_day_max=config.single_day_max)
                     or coverage_report(data, lessons))
     if not fully_valid(cp.lessons):
+        v1.v2_outcome = "invalid_output"
         return v1                      # backend misbehaved: v1 wins
     # prefer v1 on cost only when v1 itself satisfies everything —
     # including promoted objective caps, which v1 cannot enforce
-    if (v1.complete and fully_valid(v1.lessons)
-            and (weighted_cost(data, cp.lessons, config, reference)
-                 > weighted_cost(data, v1.lessons, config, reference))):
-        return v1                      # time budget produced nothing better
+    v1_usable = v1.complete and fully_valid(v1.lessons)
+    cp_cost = weighted_cost(data, cp.lessons, config, reference)
+    v1_cost = (weighted_cost(data, v1.lessons, config, reference)
+               if v1_usable else None)
+    if v1_usable and cp_cost > v1_cost:
+        v1.v2_outcome = "kept_v1"      # budget produced nothing better
+        return v1
+    if cp_state == "optimal":
+        cp.v2_outcome = "optimal"      # proved best possible
+    elif v1_usable and cp_cost == v1_cost:
+        cp.v2_outcome = "no_improvement"
+    else:
+        cp.v2_outcome = "improved"
     return cp
 
 
@@ -214,12 +227,20 @@ def resolve_minimal_disruption(data: Dataset, current: list[Lesson],
 def _solve_cpsat(data: Dataset, config: SolverConfig,
                  pinned: list[Lesson],
                  reference: list[Lesson] | None,
-                 hint: list[Lesson] | None = None) -> SolveResult | None:
-    """Build and solve the CP-SAT model. None = defer to v1."""
+                 hint: list[Lesson] | None = None
+                 ) -> tuple[SolveResult | None, str]:
+    """Build and solve the CP-SAT model.
+
+    Returns (result, state); result None = defer to v1, with state
+    saying why: "unavailable" (no ortools), "input_problem",
+    "infeasible" (the hard rules admit NO schedule), or
+    "no_solution_in_budget" (search ended before finding one). With a
+    result, state is "optimal" (proved best) or "feasible" (budget
+    ended first)."""
     try:
         from ortools.sat.python import cp_model
     except ImportError:
-        return None
+        return None, "unavailable"
 
     slots = sorted(data.timeslots.values(), key=_slot_sort_key)
     room_ids = sorted(data.rooms)
@@ -232,7 +253,7 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     remaining: dict[tuple[str, str], int] = {}
     for (st, su), need in sorted(data.student_needs.items()):
         if st not in data.students or su not in data.subjects:
-            return None                # unschedulable need: v1 reports it
+            return None, "input_problem"   # unschedulable: v1 reports it
         rem = need - pinned_count.get((st, su), 0)
         if rem > 0:
             remaining[(st, su)] = rem
@@ -445,8 +466,10 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     solver.parameters.num_workers = 1
     solver.parameters.repair_hint = True   # for slightly-stale hints
     status = solver.Solve(m)
+    if status == cp_model.INFEASIBLE:
+        return None, "infeasible"
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        return None
+        return None, "no_solution_in_budget"
 
     lessons = list(pinned)
     for (st, su, sid, t, r), v in sorted(x.items()):
@@ -454,4 +477,5 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             lessons.append(Lesson(st, su, t, r, sid))
     return SolveResult(lessons, [], complete=True,
                        nodes_explored=int(solver.NumBranches()),
-                       backend="cpsat")
+                       backend="cpsat"), (
+        "optimal" if status == cp_model.OPTIMAL else "feasible")

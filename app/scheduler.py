@@ -261,6 +261,10 @@ class SolveResult:
     complete: bool
     nodes_explored: int = 0
     backend: str = "v1"                      # which solver produced this
+    # what the exact optimizer did (None unless solve_v2 was asked):
+    # optimal | improved | no_improvement | kept_v1 |
+    # no_solution_in_budget | infeasible | invalid_output | unavailable
+    v2_outcome: str | None = None
 
 
 class _State:
