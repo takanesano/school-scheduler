@@ -523,6 +523,10 @@ def generate_schedule(opts: GenerateOptions,
     if opts.solver == "v2":
         # exact CP-SAT optimization; validates its own output and falls
         # back to the v1 pipeline internally when it cannot do better
+        # parallel wall-clock mode: the user's budget is real seconds.
+        # A single deterministic worker spends its whole budget in
+        # presolve on big terms and never even reaches the warm start;
+        # the portfolio search optimizes hard within the same time.
         cfg = SolverConfig(
             teacher_capacity=s["teacher_capacity"],
             student_day_cap=s["student_day_cap"],
@@ -530,8 +534,8 @@ def generate_schedule(opts: GenerateOptions,
             single_day_max=s["single_day_max"],
             objective_caps=s["objective_caps"] or None,
             weights=ObjectiveWeights.lexicographic(order),
-            deterministic_time=opts.v2_time_budget,
-            time_limit_seconds=opts.v2_time_budget * 3 + 10)  # wall safety
+            num_workers=8,
+            time_limit_seconds=opts.v2_time_budget)
         result = solve_v2(data, config=cfg, fixed_lessons=fixed)
     else:
         result = solve(data, fixed_lessons=fixed,
