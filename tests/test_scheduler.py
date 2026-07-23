@@ -137,6 +137,45 @@ def test_room_capacity_two_allows_two_lessons():
     assert vs == []
 
 
+def test_room_teacher_limit_violated_by_second_teacher():
+    d = make_data()
+    d.rooms["r1"] = Room("r1", "Room 1", 2, teacher_capacity=1)
+    vs = validate(d, [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+                      Lesson("s2", "eng", "t2", "r1", "mon-1", id=2)])
+    assert codes(vs) == ["room_teacher_over_capacity"]
+
+
+def test_room_teacher_limit_allows_same_teacher_pairing():
+    """One teacher with two paired students is ONE teacher in the room."""
+    d = make_data()
+    d.rooms["r1"] = Room("r1", "Room 1", 2, teacher_capacity=1)
+    vs = validate(d, [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+                      Lesson("s2", "eng", "t1", "r1", "mon-1", id=2)])
+    assert vs == []
+
+
+def test_room_teacher_limit_zero_means_no_limit():
+    d = make_data()
+    d.rooms["r1"] = Room("r1", "Room 1", 2, teacher_capacity=0)
+    vs = validate(d, [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+                      Lesson("s2", "eng", "t2", "r1", "mon-1", id=2)])
+    assert vs == []
+
+
+def test_solver_respects_room_teacher_limit():
+    """Both lessons need different teachers; the room takes only one
+    teacher per slot, so the solver must split them across slots (it
+    would pack them into mon-1 otherwise)."""
+    d = make_data()
+    d.rooms["r1"] = Room("r1", "Room 1", 2, teacher_capacity=1)
+    d.teacher_subjects = {("t1", "math"), ("t2", "eng")}
+    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    r = solve(d)
+    assert r.complete
+    assert validate(d, r.lessons) == []
+    assert len({l.timeslot_id for l in r.lessons}) == 2
+
+
 def test_student_two_consecutive_lessons_per_day_ok():
     d = make_data()
     lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),

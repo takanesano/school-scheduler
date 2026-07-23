@@ -290,6 +290,7 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     by_student_slot = defaultdict(list)
     by_teacher_slot = defaultdict(list)
     by_room_slot = defaultdict(list)
+    by_room_slot_teacher = defaultdict(list)   # H9: (room, slot, teacher)
     by_sdp = defaultdict(list)         # (student, date, period)
     by_teacher_day = defaultdict(list)
     by_teacher = defaultdict(list)
@@ -298,6 +299,7 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         by_student_slot[(st, sid)].append(v)
         by_teacher_slot[(t, sid)].append(v)
         by_room_slot[(r, sid)].append(v)
+        by_room_slot_teacher[(r, sid, t)].append(v)
         by_sdp[(st, slot.date, slot.period)].append(v)
         by_teacher_day[(t, slot.date)].append(v)
         by_teacher[t].append(v)
@@ -311,6 +313,30 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     for (r, sid), vs in sorted(by_room_slot.items()):
         m.Add(sum(vs) <= data.rooms[r].capacity
               - pin_room_slot.get((r, sid), 0))
+
+    # H9: max DISTINCT teachers per (room, slot). A presence bool per
+    # teacher is forced up by any of that teacher's lessons there;
+    # pinned teachers count as constants.
+    pin_room_slot_teachers: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for l in pinned:
+        pin_room_slot_teachers[(l.room_id, l.timeslot_id)].add(l.teacher_id)
+    h9_slots = defaultdict(set)                # (room, slot) -> teachers
+    for (r, sid, t) in by_room_slot_teacher:
+        h9_slots[(r, sid)].add(t)
+    for (r, sid), teachers in sorted(h9_slots.items()):
+        tcap = data.rooms[r].teacher_capacity
+        if not tcap:
+            continue
+        pinned_here = pin_room_slot_teachers.get((r, sid), set())
+        if len(teachers | pinned_here) <= tcap:
+            continue                           # can never exceed the limit
+        present = []
+        for t in sorted(teachers - pinned_here):
+            y = m.NewBoolVar(f"rt[{r},{sid},{t}]")
+            for v in by_room_slot_teacher[(r, sid, t)]:
+                m.Add(v <= y)
+            present.append(y)
+        m.Add(sum(present) <= tcap - len(pinned_here))
 
     # student-day structures: cap and consecutiveness
     day_periods: dict[str, list[int]] = defaultdict(list)

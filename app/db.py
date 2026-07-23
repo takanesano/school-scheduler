@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS subjects (
 CREATE TABLE IF NOT EXISTS rooms (
     id       TEXT PRIMARY KEY,
     name     TEXT NOT NULL,
-    capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity >= 1)
+    capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity >= 1),
+    -- max DISTINCT teachers in the room per timeslot; 0 = no limit
+    teacher_capacity INTEGER NOT NULL DEFAULT 0 CHECK (teacher_capacity >= 0)
 );
 
 CREATE TABLE IF NOT EXISTS timeslots (
@@ -97,6 +99,17 @@ def init_db(db_path: str | Path = DEFAULT_DB_PATH) -> None:
     conn = connect(db_path)
     try:
         conn.executescript(SCHEMA)
+        _migrate_schema(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    """Additive migrations for DBs created before a column existed
+    (CREATE TABLE IF NOT EXISTS never alters an existing table)."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(rooms)")}
+    if "teacher_capacity" not in cols:
+        conn.execute("ALTER TABLE rooms ADD COLUMN teacher_capacity "
+                     "INTEGER NOT NULL DEFAULT 0 "
+                     "CHECK (teacher_capacity >= 0)")

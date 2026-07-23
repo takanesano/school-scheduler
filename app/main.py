@@ -83,6 +83,8 @@ class Named(BaseModel):
 
 class RoomIn(Named):
     capacity: int = Field(default=1, ge=1)
+    # max distinct teachers in the room per timeslot; 0 = no limit
+    teacher_capacity: int = Field(default=0, ge=0)
 
 
 class TimeslotIn(BaseModel):
@@ -132,9 +134,12 @@ for _t in sorted(SIMPLE_TABLES):
 def upsert_room(item: RoomIn, conn: sqlite3.Connection = Depends(get_conn)):
     with conn:
         conn.execute(
-            "INSERT INTO rooms (id, name, capacity) VALUES (?, ?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, capacity=excluded.capacity",
-            (item.id, item.name, item.capacity))
+            "INSERT INTO rooms (id, name, capacity, teacher_capacity) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, "
+            "capacity=excluded.capacity, "
+            "teacher_capacity=excluded.teacher_capacity",
+            (item.id, item.name, item.capacity, item.teacher_capacity))
     return {"ok": True}
 
 
@@ -446,8 +451,10 @@ def load_dataset(conn: sqlite3.Connection) -> Dataset:
         data.teachers[r["id"]] = r["name"]
     for r in conn.execute("SELECT id, name FROM subjects"):
         data.subjects[r["id"]] = r["name"]
-    for r in conn.execute("SELECT id, name, capacity FROM rooms"):
-        data.rooms[r["id"]] = Room(r["id"], r["name"], r["capacity"])
+    for r in conn.execute(
+            "SELECT id, name, capacity, teacher_capacity FROM rooms"):
+        data.rooms[r["id"]] = Room(r["id"], r["name"], r["capacity"],
+                                   r["teacher_capacity"])
     for r in conn.execute("SELECT id, date, period, label FROM timeslots"):
         data.timeslots[r["id"]] = Timeslot(r["id"], r["date"], r["period"], r["label"])
     for r in conn.execute("SELECT teacher_id, subject_id FROM teacher_subjects"):

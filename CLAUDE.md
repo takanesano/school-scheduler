@@ -45,6 +45,13 @@ weeks and marks non-term days `in_term: false`.
 - H5 is teacher CAPACITY (default 2): a teacher may teach two students at
   once, different subjects allowed — code `teacher_over_capacity`, not
   double-booked. `teacher_capacity` is a parameter on validate/solve.
+- H9 is the ROOM TEACHER LIMIT: `rooms.teacher_capacity` = max DISTINCT
+  teachers in the room per timeslot, 0 = no limit (the default; column
+  added by `db._migrate_schema`, an additive ALTER TABLE run from
+  init_db). Code `room_teacher_over_capacity`; enforced in validate,
+  `_State.fits` (refcounted (room, slot, teacher) sets), and the CP
+  model (per-teacher presence bools `rt[...]`, x ≤ y, Σy ≤ cap; pinned
+  teachers are constants). Per-room DATA, not a settings-table entry.
 - H8 is the STUDENT DAY rule (always on; the old optional per-subject
   spread flag `one_subject_session_per_day` is GONE from every signature
   and the API): max two lessons per student per calendar day

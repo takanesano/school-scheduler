@@ -567,6 +567,59 @@ def test_any_condition_can_be_always_active(client, term, value):
     assert client.get("/api/schedule").json()["violations"] == []
 
 
+def test_room_teacher_limit_via_api(client):
+    """Rooms carry an optional teacher limit; adding a lesson that would
+    put a second teacher into the room-slot is cautioned like any other
+    violation and can be forced."""
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    client.post("/api/teacher_availability",
+                json={"teacher_id": "t2", "timeslot_id": "mon-1"})
+    client.post("/api/rooms",
+                json={"id": "r2", "name": "Hall", "capacity": 2,
+                      "teacher_capacity": 1})
+    rooms = {r["id"]: r for r in client.get("/api/rooms").json()}
+    assert rooms["r2"]["teacher_capacity"] == 1
+    assert rooms["r1"]["teacher_capacity"] == 0     # default: no limit
+
+    base = {"subject_id": "math", "room_id": "r2", "timeslot_id": "mon-1"}
+    assert client.post("/api/lessons", json=dict(
+        base, student_id="s1", teacher_id="t1")).status_code == 200
+    r = client.post("/api/lessons", json=dict(
+        base, student_id="s2", teacher_id="t2"))
+    assert r.status_code == 409
+    assert any(v["code"] == "room_teacher_over_capacity"
+               for v in r.json()["detail"]["violations"])
+    r = client.post("/api/lessons", json=dict(
+        base, student_id="s2", teacher_id="t2", force=True))
+    assert r.status_code == 200
+    codes = [v["code"] for v in
+             client.get("/api/schedule").json()["violations"]]
+    assert "room_teacher_over_capacity" in codes
+
+
+def test_old_db_gains_room_teacher_capacity_column(tmp_path):
+    """DBs created before the room teacher limit existed are migrated
+    in place on startup (ALTER TABLE, default 0 = no limit)."""
+    import sqlite3 as s3
+    from app import db as appdb
+    db_path = tmp_path / "old.db"
+    conn = s3.connect(db_path)
+    with conn:
+        conn.execute("CREATE TABLE rooms (id TEXT PRIMARY KEY, "
+                     "name TEXT NOT NULL, capacity INTEGER NOT NULL)")
+        conn.execute("INSERT INTO rooms VALUES ('r1', 'Room 1', 3)")
+    conn.close()
+    appdb.init_db(db_path)
+    conn = appdb.connect(db_path)
+    row = conn.execute("SELECT capacity, teacher_capacity FROM rooms "
+                       "WHERE id = 'r1'").fetchone()
+    conn.close()
+    assert (row["capacity"], row["teacher_capacity"]) == (3, 0)
+
+
 @pytest.mark.parametrize("legacy,expect_gap_cap", [("1", True), ("0", False)])
 def test_legacy_require_consecutive_migrates_once(tmp_path, legacy,
                                                   expect_gap_cap):

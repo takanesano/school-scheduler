@@ -52,7 +52,9 @@ A generated schedule always satisfies these hard constraints:
 3. A student has at most one lesson per timeslot; a teacher has at most
    **two** — a teacher may teach two students at once, even in different
    subjects.
-4. Lessons in a room never exceed its capacity.
+4. Lessons in a room never exceed its capacity, and — when the room has
+   a **teacher limit** — no more than that many different teachers are
+   in the room at the same time (0 = no limit).
 5. A student has at most **two lessons per calendar day**, and when there
    are two they must be in **consecutive periods** (no gap in between).
 
@@ -148,7 +150,7 @@ student also removes their availability, needs, and lessons).
 | `students.csv` | `id,name` |
 | `teachers.csv` | `id,name` |
 | `subjects.csv` | `id,name` |
-| `rooms.csv` | `id,name,capacity` |
+| `rooms.csv` | `id,name,capacity,teacher_capacity` (teacher_capacity optional: max distinct teachers per timeslot, 0 = no limit) |
 | `timeslots.csv` | `id,date,period,label` (date: `YYYY-MM-DD`; label optional, e.g. `09:00-10:10`) |
 | `teacher_subjects.csv` | `teacher_id,subject_id` |
 | `student_needs.csv` | `student_id,subject_id,sessions` (total over the term) |
