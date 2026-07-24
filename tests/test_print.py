@@ -81,6 +81,52 @@ def test_clip_view_restricts_date_range():
     assert clip_view(v, "2030-01-01", "2030-12-31")["weeks"] == []
 
 
+# ---------------------------------------------------------------- xlsx export
+
+def test_overview_xlsx_structure():
+    """The workbook mirrors the transposed table: header row, one
+    n_sub-row block per day with a merged date cell, teacher|students
+    column pairs, no subjects/rooms."""
+    import io
+
+    from openpyxl import load_workbook
+
+    from app.export_xlsx import overview_xlsx
+    d = make_data()
+    out = overview_xlsx(build_overview(d, LESSONS), STAMP)
+    assert out[:2] == b"PK"                      # zip container
+    ws = load_workbook(io.BytesIO(out)).active
+    assert ws.cell(row=1, column=1).value == "日付"
+    assert ws.cell(row=1, column=2).value.startswith("①")
+    # Monday block: two teachers in P1 (t1+t2), t1 again in P2
+    assert ws.cell(row=2, column=1).value == "7/27(月)"
+    p1 = {(ws.cell(row=r, column=2).value, ws.cell(row=r, column=3).value)
+          for r in (2, 3)}
+    assert p1 == {("田中", "葵"), ("鈴木", "蓮")}
+    # n_sub = 2 -> Wednesday block starts at row 4; its date is merged
+    assert ws.cell(row=4, column=1).value == "7/29(水)"
+    assert str(ws.merged_cells.ranges).count("A") >= 1
+    # subjects/rooms appear nowhere
+    texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value]
+    assert not any("数学" in t or "教室" in t for t in texts)
+
+
+def test_overview_xlsx_endpoint(tmp_path):
+    from fastapi.testclient import TestClient as TC
+    app.state.db_path = tmp_path / "xlsx.db"
+    try:
+        with TC(app) as c:
+            seed(c)
+            r = c.get("/api/print/overview.xlsx")
+            assert r.status_code == 200
+            assert "spreadsheetml" in r.headers["content-type"]
+            assert r.content[:2] == b"PK"
+            assert c.get(
+                "/api/print/overview.xlsx?date_from=bad").status_code == 422
+    finally:
+        del app.state.db_path
+
+
 # ------------------------------------------------------------------ endpoints
 
 @pytest.fixture

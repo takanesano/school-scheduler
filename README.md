@@ -126,7 +126,10 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   so stale copies are recognizable after a re-generate. The endpoints
   (`/api/print/overview.pdf`, `/api/print/students.pdf`,
   `/api/print/teachers.pdf`) also accept `ids=` (comma-separated) and
-  `date_from=`/`date_to=` (YYYY-MM-DD) to print subsets.
+  `date_from=`/`date_to=` (YYYY-MM-DD) to print subsets. The master
+  table is also available as an editable **Excel workbook**
+  (`/api/print/overview.xlsx`, same layout and filters: merged date
+  cells, teacher/students column pairs, A4-landscape print setup).
 - **Schedule** tab — generate/clear the timetable, see violations and
   coverage warnings, add or delete individual lessons, **drag a lesson
   card onto another timeslot to move it**, and use the card's ✎ button to

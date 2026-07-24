@@ -1467,6 +1467,8 @@ async function renderCalendars(root) {
       <a class="action secondary" id="pdf-this" href="#" hidden>this view</a>
       <a class="action secondary" href="/api/print/overview.pdf"
         target="_blank">overview</a>
+      <a class="action secondary" href="/api/print/overview.xlsx">overview
+        (Excel)</a>
       <a class="action secondary" href="/api/print/students.pdf"
         target="_blank">all students</a>
       <a class="action secondary" href="/api/print/teachers.pdf"

@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import csv_io, db, print_pdf, views
+from . import csv_io, db, export_xlsx, print_pdf, views
 from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, Room, Timeslot,
                         check_input_problems, coverage_report,
                         optimize_teacher_days, schedule_objective, solve,
@@ -898,6 +898,23 @@ def print_overview(date_from: str | None = None,
         views.build_overview(data, load_lessons(conn)), date_from, date_to)
     return _pdf_response(print_pdf.overview_pdf(view, _now_stamp()),
                          "schedule-overview.pdf")
+
+
+@app.get("/api/print/overview.xlsx")
+def print_overview_xlsx(date_from: str | None = None,
+                        date_to: str | None = None,
+                        conn: sqlite3.Connection = Depends(get_conn)):
+    date_from, date_to = (_iso_or_422(date_from, "date_from"),
+                          _iso_or_422(date_to, "date_to"))
+    data = load_dataset(conn)
+    view = print_pdf.clip_view(
+        views.build_overview(data, load_lessons(conn)), date_from, date_to)
+    return Response(
+        content=export_xlsx.overview_xlsx(view, _now_stamp()),
+        media_type="application/vnd.openxmlformats-officedocument"
+                   ".spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 'attachment; filename="schedule-overview.xlsx"'})
 
 
 @app.get("/api/print/students.pdf")
