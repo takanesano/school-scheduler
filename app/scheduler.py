@@ -68,6 +68,10 @@ class Lesson:
     room_id: str
     timeslot_id: str
     id: int | None = None
+    # user-locked: survives generate/clear, refuses drag/edit/delete
+    # until unlocked. Ignored by the pure scheduling logic (the API
+    # layer turns locked lessons into fixed_lessons).
+    locked: bool = False
 
 
 @dataclass

@@ -130,7 +130,10 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
 - **Schedule** tab — generate/clear the timetable, see violations and
   coverage warnings, add or delete individual lessons, **drag a lesson
   card onto another timeslot to move it**, and use the card's ✎ button to
-  **edit its subject, teacher, or room in place**. While choosing, every
+  **edit its subject, teacher, or room in place**. The 🔓/🔒 button
+  **locks a lesson in place**: locked lessons are always pinned when
+  generating (both solvers schedule around them), survive "Clear
+  schedule", and refuse drags, edits and deletion until unlocked. While choosing, every
   dropdown option is marked ✓/✗ live (would the lesson be valid with that
   choice?), and the current combination's would-be violations are shown
   before you save. Manual additions and

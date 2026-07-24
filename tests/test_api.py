@@ -652,6 +652,79 @@ def test_teacher_day_max_via_api(client):
                           "max_lessons_per_day": 1}
 
 
+def test_lesson_lock_guards_moves_edits_and_deletion(client):
+    """A locked lesson refuses PATCH/DELETE (409) until unlocked, and
+    survives Clear schedule."""
+    seed_world(client)
+    r = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"})
+    lid = r.json()["id"]
+    client.post("/api/lessons", json={
+        "student_id": "s2", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-2"})
+
+    assert client.post(f"/api/lessons/{lid}/lock",
+                       json={"locked": True}).status_code == 200
+    sched = client.get("/api/schedule").json()
+    locked_flags = {l["id"]: l["locked"] for l in sched["lessons"]}
+    assert locked_flags[lid] is True
+
+    assert client.patch(f"/api/lessons/{lid}",
+                        json={"timeslot_id": "tue-1"}).status_code == 409
+    assert client.delete(f"/api/lessons/{lid}").status_code == 409
+
+    r = client.delete("/api/schedule")     # clear keeps the locked one
+    assert r.json() == {"ok": True, "deleted": 1, "kept_locked": 1}
+    remaining = client.get("/api/schedule").json()["lessons"]
+    assert [l["id"] for l in remaining] == [lid]
+
+    client.post(f"/api/lessons/{lid}/lock", json={"locked": False})
+    assert client.delete(f"/api/lessons/{lid}").status_code == 200
+    assert client.post("/api/lessons/999/lock",
+                       json={"locked": True}).status_code == 404
+
+
+def test_generate_pins_locked_lessons_without_keep_existing(client):
+    """A locked lesson at an unusual slot survives a full re-generate
+    (keep_existing off) with its lock intact; unlocked lessons are
+    re-solved as usual."""
+    seed_world(client)
+    client.post("/api/student_needs", json={
+        "student_id": "s1", "subject_id": "math", "sessions": 1})
+    r = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-2"})
+    client.post(f"/api/lessons/{r.json()['id']}/lock",
+                json={"locked": True})
+    assert client.post("/api/schedule/generate",
+                       json={}).json()["complete"] is True
+    lessons = client.get("/api/schedule").json()["lessons"]
+    assert [(l["timeslot_id"], l["locked"]) for l in lessons] == \
+        [("mon-2", True)]
+
+
+def test_old_db_gains_locked_lessons_column(tmp_path):
+    """Lessons tables from before the lock feature are migrated in
+    place on startup."""
+    import sqlite3 as s3
+    from app import db as appdb
+    db_path = tmp_path / "old_lessons.db"
+    conn = s3.connect(db_path)
+    with conn:
+        conn.execute("CREATE TABLE lessons (id INTEGER PRIMARY KEY, "
+                     "student_id TEXT, subject_id TEXT, teacher_id TEXT, "
+                     "room_id TEXT, timeslot_id TEXT)")
+        conn.execute("INSERT INTO lessons VALUES "
+                     "(1, 's1', 'math', 't1', 'r1', 'mon-1')")
+    conn.close()
+    appdb.init_db(db_path)
+    conn = appdb.connect(db_path)
+    row = conn.execute("SELECT locked FROM lessons WHERE id = 1").fetchone()
+    conn.close()
+    assert row["locked"] == 0
+
+
 def test_old_db_gains_teacher_day_max_column(tmp_path):
     """Teachers tables from before the daily cap existed are migrated
     in place on startup (ALTER TABLE, default 0 = no limit)."""
