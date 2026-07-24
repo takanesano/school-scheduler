@@ -144,6 +144,16 @@ weeks and marks non-term days `in_term: false`.
   (force does NOT override a lock). The card's 🔓/🔒 button toggles;
   locked cards are draggable=false with edit/del buttons removed.
   Generate's DELETE+reinsert must keep the locked column.
+- Multi-select + repeat: `state.selectMode` (Select lessons… toggle in
+  the Timetable panel) makes cards click-to-select (in-place class
+  toggle + `updateSelBar`, NO full render per click — 875 cards) and
+  disables dragging; `POST /api/lessons/repeat {lesson_ids, weeks,
+  force}` copies each lesson to the same (weekday, period) slot of the
+  next N weeks, skipping missing (date, period) slots and exact
+  duplicates (counts reported), 409-unless-force on violations
+  involving the new copies. Copies are plain unlocked lessons even
+  when the source is locked. Selection is pruned against live lesson
+  ids on each render.
 - Lesson moves (drag-and-drop) and inline edits (✎ button: subject /
   teacher / room dropdowns in the card) both go through
   `PATCH /api/lessons/{id}` via the shared `patchLesson` caution flow,
