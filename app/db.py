@@ -83,7 +83,9 @@ CREATE TABLE IF NOT EXISTS lessons (
     subject_id  TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
     teacher_id  TEXT NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
     room_id     TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-    timeslot_id TEXT NOT NULL REFERENCES timeslots(id) ON DELETE CASCADE
+    timeslot_id TEXT NOT NULL REFERENCES timeslots(id) ON DELETE CASCADE,
+    -- user-locked lessons survive generate/clear and refuse moves
+    locked      INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1))
 );
 """
 
@@ -121,3 +123,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE teachers ADD COLUMN max_lessons_per_day "
                      "INTEGER NOT NULL DEFAULT 0 "
                      "CHECK (max_lessons_per_day >= 0)")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(lessons)")}
+    if "locked" not in cols:
+        conn.execute("ALTER TABLE lessons ADD COLUMN locked "
+                     "INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1))")

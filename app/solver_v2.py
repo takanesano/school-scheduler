@@ -578,7 +578,14 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             m.AddHint(var, 1 if key in hint_keys else 0)
 
     solver = cp_model.CpSolver()
-    solver.parameters.num_workers = config.num_workers
+    workers = config.num_workers
+    if workers > 1 and config.time_limit_seconds < 5:
+        # a wall deadline shorter than the portfolio's startup can kill
+        # workers mid-initialization — ortools then aborts the whole
+        # PROCESS (native CHECK failure), intermittently. Tiny budgets
+        # gain nothing from parallelism anyway: run single-threaded.
+        workers = 1
+    solver.parameters.num_workers = workers
     if config.num_workers == 1:
         # deterministic mode: the reproducible work-unit budget binds
         solver.parameters.max_deterministic_time = config.deterministic_time

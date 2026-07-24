@@ -146,6 +146,15 @@ weeks and marks non-term days `in_term: false`.
   mass-creates slots for a date range × weekdays × periods; it skips
   existing (date, period) pairs and falls back to YYYYMMDD-period ids on
   MMDD collisions (range capped at 400 days).
+- Lesson LOCKING: `lessons.locked` (migrated column; `Lesson.locked`
+  field, ignored by pure scheduler logic). POST
+  /api/lessons/{id}/lock toggles it. Locked lessons are ALWAYS in
+  generate's fixed_lessons (even without keep_existing), survive
+  DELETE /api/schedule (clears WHERE locked=0; response reports
+  deleted/kept_locked), and PATCH/DELETE return 409 until unlocked
+  (force does NOT override a lock). The card's 🔓/🔒 button toggles;
+  locked cards are draggable=false with edit/del buttons removed.
+  Generate's DELETE+reinsert must keep the locked column.
 - Lesson moves (drag-and-drop) and inline edits (✎ button: subject /
   teacher / room dropdowns in the card) both go through
   `PATCH /api/lessons/{id}` via the shared `patchLesson` caution flow,

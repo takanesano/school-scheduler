@@ -999,8 +999,14 @@ async function renderSchedule(root) {
     if (v >= 1 && v <= 600) state.exactBudget = v;
   };
   $("#clear", ctrl).onclick = async () => {
-    if (!await appConfirm("Delete all scheduled lessons?", "Delete all")) return;
-    await api("DELETE", "/api/schedule").catch(e => toast(e.message, true));
+    if (!await appConfirm("Delete all scheduled lessons? (🔒 locked "
+      + "lessons are kept)", "Delete all")) return;
+    try {
+      const res = await api("DELETE", "/api/schedule");
+      if (res.kept_locked) {
+        toast(`Cleared ${res.deleted} lessons — ${res.kept_locked} locked lesson(s) kept`);
+      }
+    } catch (e) { toast(e.message, true); }
     render();
   };
 
@@ -1339,25 +1345,42 @@ async function renderSchedule(root) {
       refresh();
     }
 
+    const lockedIds = new Set(
+      schedule.lessons.filter(l => l.locked).map(l => l.id));
     grid.append(calendarTable(overview, (entry) => {
       const box = el(`<div class="cal-entry" data-teacher-id="${entry.teacher_id}">
         <b>${esc(entry.teacher_name)}</b></div>`);
       for (const l of entry.lessons) {
-        const card = el(`<div class="lesson-card${badIds.has(l.lesson_id) ? " bad" : ""}"
-          draggable="true" data-lesson-id="${l.lesson_id}"
+        const locked = lockedIds.has(l.lesson_id);
+        // locked lessons can't be dragged, edited or deleted — only the
+        // lock button stays active, so a stray drag can't move them
+        const card = el(`<div class="lesson-card${badIds.has(l.lesson_id) ? " bad" : ""}${locked ? " locked" : ""}"
+          draggable="${locked ? "false" : "true"}" data-lesson-id="${l.lesson_id}"
           data-student-id="${l.student_id}">
           ${esc(l.student_name)} — ${esc(l.subject_name)}
           <span class="muted">· ${esc(l.room_name)}</span>
-          <button class="edit" title="edit teacher / room / subject">✎</button>
-          <button class="del" title="delete">×</button></div>`);
-        card.ondragstart = (e) => {
-          e.dataTransfer.setData("text/plain", String(l.lesson_id));
-          e.dataTransfer.effectAllowed = "move";
-        };
-        $(".edit", card).onclick = () =>
-          openEditor(card, l, entry.teacher_id);
-        $(".del", card).onclick = async () => {
-          await api("DELETE", `/api/lessons/${l.lesson_id}`).catch(e => toast(e.message, true));
+          <button class="lock" title="${locked
+            ? "locked in place — click to unlock"
+            : "lock in place (survives generate and clear)"}">${locked ? "🔒" : "🔓"}</button>
+          ${locked ? "" : `<button class="edit" title="edit teacher / room / subject">✎</button>
+          <button class="del" title="delete">×</button>`}</div>`);
+        if (!locked) {
+          card.ondragstart = (e) => {
+            e.dataTransfer.setData("text/plain", String(l.lesson_id));
+            e.dataTransfer.effectAllowed = "move";
+          };
+          $(".edit", card).onclick = () =>
+            openEditor(card, l, entry.teacher_id);
+          $(".del", card).onclick = async () => {
+            await api("DELETE", `/api/lessons/${l.lesson_id}`).catch(e => toast(e.message, true));
+            render();
+          };
+        }
+        $(".lock", card).onclick = async () => {
+          try {
+            await api("POST", `/api/lessons/${l.lesson_id}/lock`,
+              { locked: !locked });
+          } catch (e) { toast(e.message, true); }
           render();
         };
         box.append(card);

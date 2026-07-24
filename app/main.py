@@ -509,10 +509,11 @@ def load_dataset(conn: sqlite3.Connection) -> Dataset:
 
 def load_lessons(conn: sqlite3.Connection) -> list[Lesson]:
     return [Lesson(r["student_id"], r["subject_id"], r["teacher_id"],
-                   r["room_id"], r["timeslot_id"], id=r["id"])
+                   r["room_id"], r["timeslot_id"], id=r["id"],
+                   locked=bool(r["locked"]))
             for r in conn.execute(
-                "SELECT id, student_id, subject_id, teacher_id, room_id, timeslot_id "
-                "FROM lessons ORDER BY id")]
+                "SELECT id, student_id, subject_id, teacher_id, room_id, "
+                "timeslot_id, locked FROM lessons ORDER BY id")]
 
 
 class GenerateOptions(BaseModel):
@@ -557,7 +558,9 @@ def generate_schedule(opts: GenerateOptions,
     data = load_dataset(conn)
     problems = check_input_problems(data)
     existing = load_lessons(conn)
-    fixed = existing if opts.keep_existing else []
+    # user-locked lessons are ALWAYS pinned; "keep existing" pins all
+    fixed = existing if opts.keep_existing else [
+        l for l in existing if l.locked]
     s = get_settings(conn)
     if opts.solver == "v2":
         # exact CP-SAT optimization; validates its own output and falls
@@ -605,9 +608,10 @@ def generate_schedule(opts: GenerateOptions,
     with conn:
         conn.execute("DELETE FROM lessons")
         conn.executemany(
-            "INSERT INTO lessons (student_id, subject_id, teacher_id, room_id, timeslot_id) "
-            "VALUES (?, ?, ?, ?, ?)",
-            [(l.student_id, l.subject_id, l.teacher_id, l.room_id, l.timeslot_id)
+            "INSERT INTO lessons (student_id, subject_id, teacher_id, "
+            "room_id, timeslot_id, locked) VALUES (?, ?, ?, ?, ?, ?)",
+            [(l.student_id, l.subject_id, l.teacher_id, l.room_id,
+              l.timeslot_id, int(l.locked))
              for l in result.lessons])
     return {
         "complete": result.complete,
@@ -691,6 +695,10 @@ def update_lesson(lesson_id: int, patch: LessonPatch,
     target = next((l for l in lessons if l.id == lesson_id), None)
     if target is None:
         raise HTTPException(404, f"No such lesson {lesson_id}")
+    if target.locked:
+        raise HTTPException(
+            409, "This lesson is locked — unlock it before moving or "
+                 "editing it")
 
     data = load_dataset(conn)
     fields = {k: v for k, v in patch.model_dump().items()
@@ -771,20 +779,47 @@ def check_lesson_options(lesson_id: int, opts: OptionsIn,
     }
 
 
-@app.delete("/api/lessons/{lesson_id}")
-def delete_lesson(lesson_id: int, conn: sqlite3.Connection = Depends(get_conn)):
+class LockIn(BaseModel):
+    locked: bool
+
+
+@app.post("/api/lessons/{lesson_id}/lock")
+def set_lesson_lock(lesson_id: int, body: LockIn,
+                    conn: sqlite3.Connection = Depends(get_conn)):
+    """Lock/unlock a lesson in place: locked lessons are always pinned
+    at generate time, survive Clear schedule, and refuse moves, edits
+    and deletion until unlocked."""
     with conn:
-        cur = conn.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
+        cur = conn.execute("UPDATE lessons SET locked = ? WHERE id = ?",
+                           (int(body.locked), lesson_id))
     if cur.rowcount == 0:
         raise HTTPException(404, f"No such lesson {lesson_id}")
+    return {"ok": True, "locked": body.locked}
+
+
+@app.delete("/api/lessons/{lesson_id}")
+def delete_lesson(lesson_id: int, conn: sqlite3.Connection = Depends(get_conn)):
+    row = conn.execute("SELECT locked FROM lessons WHERE id = ?",
+                       (lesson_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"No such lesson {lesson_id}")
+    if row["locked"]:
+        raise HTTPException(
+            409, "This lesson is locked — unlock it before deleting it")
+    with conn:
+        conn.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
     return {"ok": True}
 
 
 @app.delete("/api/schedule")
 def clear_schedule(conn: sqlite3.Connection = Depends(get_conn)):
+    """Clear the schedule. Locked lessons survive — unlock them (or
+    delete them individually) to remove them."""
     with conn:
-        conn.execute("DELETE FROM lessons")
-    return {"ok": True}
+        cur = conn.execute("DELETE FROM lessons WHERE locked = 0")
+    kept = conn.execute(
+        "SELECT COUNT(*) AS n FROM lessons").fetchone()["n"]
+    return {"ok": True, "deleted": cur.rowcount, "kept_locked": kept}
 
 
 @app.get("/api/schedule/check")
