@@ -210,16 +210,6 @@ def _teacher_lines(slot: dict) -> list[str]:
             for e in slot["entries"]]
 
 
-def _overview_lines(slot: dict) -> list[str]:
-    out = []
-    for t in slot["entries"]:
-        parts = [f"{l['student_name']}({l['subject_name']})"
-                 for l in t["lessons"]]
-        pupils = "、".join(parts)
-        out.append(f"{_slot_prefix(slot)}{t['teacher_name']}: {pupils}")
-    return out
-
-
 def term_label(view: dict) -> str:
     """First–last in-term date across the grid, e.g. '7/21〜8/31'."""
     dates = [c["date"] for w in view["weeks"] for c in w if c["in_term"]]
@@ -228,9 +218,133 @@ def term_label(view: dict) -> str:
     return f"{_fmt_date(min(dates))}〜{_fmt_date(max(dates))}"
 
 
+def _fit_text(pdf: FPDF, text: str, width: float, size: float,
+              min_size: float = 4.2) -> float:
+    """Largest font size ≤ ``size`` at which ``text`` fits ``width``;
+    the caller truncates if even ``min_size`` is too big."""
+    s = size
+    while s > min_size:
+        pdf.set_font("noto", size=s)
+        if pdf.get_string_width(text) <= width:
+            return s
+        s -= 0.4
+    pdf.set_font("noto", size=min_size)
+    return min_size
+
+
+def _truncated(pdf: FPDF, text: str, width: float) -> str:
+    if pdf.get_string_width(text) <= width:
+        return text
+    while text and pdf.get_string_width(text + "…") > width:
+        text = text[:-1]
+    return text + "…"
+
+
+# transposed master table: one ROW per day, one COLUMN per period; each
+# day×period cell is a fixed stack of teacher sub-rows (teacher name |
+# their students). Subjects and rooms are deliberately not shown.
+DATE_COL_W = 21.0
+SUB_H = 3.5              # height of one teacher sub-row (mm)
+NAME_FRAC = 0.34         # teacher-name part of a period cell
+
+
 def overview_pdf(view: dict, generated_at: str) -> bytes:
     pdf = _HandoutPDF(term_label(view), generated_at)
-    _grid_pages(pdf, view, "時間割 全体表", _overview_lines)
+    pdf.page_title = "時間割 全体表"
+    days = [c for w in view["weeks"] for c in w if c["in_term"]]
+    periods = view["periods"]
+    if not days or not periods:
+        pdf.add_page()
+        pdf.set_font("noto", size=SIZE_BODY)
+        pdf.set_xy(MARGIN, MARGIN + HEADER_H)
+        pdf.cell(GRID_W, 5, "時間割はまだありません")
+        return bytes(pdf.output())
+
+    # every cell gets the same number of teacher sub-rows (the busiest
+    # slot of the term decides), so day rows line up uniformly
+    n_sub = max((len(s["entries"]) for d in days for s in d["slots"]),
+                default=1) or 1
+    # a representative time label per period (first seen)
+    label_of: dict[int, str] = {}
+    for d in days:
+        for s in d["slots"]:
+            if s["label"] and s["period"] not in label_of:
+                label_of[s["period"]] = s["label"]
+
+    per_w = (GRID_W - DATE_COL_W) / len(periods)
+    name_w = per_w * NAME_FRAC
+    row_h = n_sub * SUB_H
+    top = MARGIN + HEADER_H
+    bottom = PAGE_H - FOOTER_H - 2.0
+
+    def table_header(y0: float) -> float:
+        pdf.set_font("noto", size=SIZE_DATE)
+        pdf.set_text_color(0)
+        pdf.set_draw_color(0)
+        pdf.set_fill_color(235)
+        pdf.set_xy(MARGIN, y0)
+        pdf.cell(DATE_COL_W, WDAY_H, "日付", border=1, align="C", fill=True)
+        for i, p in enumerate(periods):
+            head = _circled(p)
+            if label_of.get(p):
+                head += f" {label_of[p]}"
+            pdf.set_xy(MARGIN + DATE_COL_W + i * per_w, y0)
+            pdf.cell(per_w, WDAY_H, head, border=1, align="C", fill=True)
+        return y0 + WDAY_H
+
+    pdf.add_page()
+    y = table_header(top)
+    for day in days:
+        if y + row_h > bottom:
+            pdf.add_page()
+            y = table_header(top)
+        # date cell (weekday colored the Japanese way)
+        d = dt.date.fromisoformat(day["date"])
+        pdf.set_draw_color(0)
+        pdf.rect(MARGIN, y, DATE_COL_W, row_h)
+        wd = day["weekday"]
+        if wd == "Sun":
+            pdf.set_text_color(190, 30, 30)
+        elif wd == "Sat":
+            pdf.set_text_color(30, 60, 190)
+        else:
+            pdf.set_text_color(0)
+        pdf.set_font("noto", size=SIZE_DATE)
+        pdf.set_xy(MARGIN + 1, y + row_h / 2 - 2)
+        pdf.cell(DATE_COL_W - 2, 4,
+                 f"{d.month}/{d.day}({WEEKDAY_JA[wd]})")
+        slots = {s["period"]: s for s in day["slots"]}
+        for i, p in enumerate(periods):
+            x = MARGIN + DATE_COL_W + i * per_w
+            slot = slots.get(p)
+            if slot is None:                    # no such period this day
+                pdf.set_fill_color(240)
+                pdf.rect(x, y, per_w, row_h, style="DF")
+                continue
+            pdf.rect(x, y, per_w, row_h)
+            # light separators: sub-rows and the name|students split
+            pdf.set_draw_color(200)
+            for k in range(1, n_sub):
+                pdf.line(x, y + k * SUB_H, x + per_w, y + k * SUB_H)
+            pdf.line(x + name_w, y, x + name_w, y + row_h)
+            pdf.set_draw_color(0)
+            for k, t in enumerate(slot["entries"][:n_sub]):
+                sy = y + k * SUB_H
+                name = t["teacher_name"]
+                pdf.set_text_color(0)
+                size = _fit_text(pdf, name, name_w - 1.2, SIZE_BODY)
+                pdf.set_font("noto", size=size)
+                pdf.set_xy(x + 0.6, sy)
+                pdf.cell(name_w - 1.2, SUB_H,
+                         _truncated(pdf, name, name_w - 1.2))
+                pupils = "、".join(l["student_name"] for l in t["lessons"])
+                size = _fit_text(pdf, pupils, per_w - name_w - 1.2,
+                                 SIZE_BODY)
+                pdf.set_font("noto", size=size)
+                pdf.set_xy(x + name_w + 0.6, sy)
+                pdf.cell(per_w - name_w - 1.2, SUB_H,
+                         _truncated(pdf, pupils, per_w - name_w - 1.2))
+        y += row_h
     return bytes(pdf.output())
 
 
