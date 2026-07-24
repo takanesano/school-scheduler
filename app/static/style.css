@@ -109,6 +109,13 @@ button.small {
 .lesson-card .edit { position: absolute; top: 0; right: 18px; border: none;
                      background: none; cursor: pointer; color: var(--muted);
                      font-size: 0.75rem; }
+.lesson-card .lock { position: absolute; top: 0; right: 33px; border: none;
+                     background: none; cursor: pointer; font-size: 0.7rem;
+                     opacity: 0.35; }
+.lesson-card .lock:hover { opacity: 1; }
+.lesson-card.locked { border-color: #b58a2a; background: #fbf3dd; }
+.lesson-card.locked .lock { right: 3px; opacity: 1; }
+.lesson-card.locked[draggable="false"] { cursor: default; }
 .lesson-card.editing { cursor: default; padding-right: 0.4rem; }
 .lesson-edit select { width: 100%; margin: 0.12rem 0; font-size: 0.78rem;
                       padding: 0.15rem 0.3rem; }
