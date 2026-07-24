@@ -305,5 +305,6 @@ button.small {
   }
   .grid-table td.avail { background: #234430; }
   .lesson-card { background: #223046; border-color: #33507e; }
+  .lesson-card.locked { background: #38301a; border-color: #8f7434; }
   .okmsg { background: #1f3a26; }
 }
