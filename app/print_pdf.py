@@ -200,7 +200,7 @@ def _slot_prefix(slot: dict) -> str:
 
 def _student_lines(slot: dict) -> list[str]:
     return [f"{_slot_prefix(slot)}{e['subject_name']} "
-            f"{e['teacher_name']}先生 {e['room_name']}"
+            f"{e['teacher_name']} {e['room_name']}"
             for e in slot["entries"]]
 
 
@@ -367,6 +367,6 @@ def teachers_pdf(views: list[dict], generated_at: str) -> bytes:
     pdf = _HandoutPDF(term_label(views[0]), generated_at)
     for v in views:
         pdf.term_label = term_label(v)
-        _grid_pages(pdf, v, f"時間割(講師用) {v['teacher_name']} 先生",
+        _grid_pages(pdf, v, f"時間割(講師用) {v['teacher_name']}",
                     _teacher_lines)
     return bytes(pdf.output())
