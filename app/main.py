@@ -678,6 +678,71 @@ def add_lesson(item: LessonIn, conn: sqlite3.Connection = Depends(get_conn)):
             "violations": _violations_json(new_violations)}
 
 
+class RepeatIn(BaseModel):
+    lesson_ids: list[int] = Field(min_length=1)
+    weeks: int = Field(ge=1, le=12)     # how many following weeks
+    force: bool = False                 # save despite violations
+
+
+@app.post("/api/lessons/repeat")
+def repeat_lessons(body: RepeatIn,
+                   conn: sqlite3.Connection = Depends(get_conn)):
+    """Copy the given lessons onto the same weekday and period of the
+    following N weeks (student/subject/teacher/room unchanged). Weeks
+    with no matching (date, period) timeslot are skipped, as are exact
+    duplicates; conflicts go through the usual 409-unless-force flow."""
+    data = load_dataset(conn)
+    lessons = load_lessons(conn)
+    by_id = {l.id: l for l in lessons}
+    missing = [i for i in body.lesson_ids if i not in by_id]
+    if missing:
+        raise HTTPException(
+            404, f"No such lesson(s): {', '.join(map(str, missing))}")
+
+    slot_at = {(s.date, s.period): s.id for s in data.timeslots.values()}
+    seen = {(l.student_id, l.subject_id, l.teacher_id, l.room_id,
+             l.timeslot_id) for l in lessons}
+    new: list[Lesson] = []
+    skipped_no_slot = 0
+    skipped_duplicate = 0
+    for lid in body.lesson_ids:
+        src = by_id[lid]
+        slot = data.timeslots[src.timeslot_id]
+        base = datetime.date.fromisoformat(slot.date)
+        for k in range(1, body.weeks + 1):
+            target = (base + datetime.timedelta(weeks=k)).isoformat()
+            sid = slot_at.get((target, slot.period))
+            if sid is None:
+                skipped_no_slot += 1
+                continue
+            key = (src.student_id, src.subject_id, src.teacher_id,
+                   src.room_id, sid)
+            if key in seen:
+                skipped_duplicate += 1
+                continue
+            seen.add(key)
+            new.append(Lesson(*key))
+
+    new_violations = []
+    if new:
+        new_violations = [
+            v for v in _validate_with_settings(conn, data, lessons + new)
+            if None in v.lesson_ids]   # violations involving new lessons
+        if new_violations and not body.force:
+            raise HTTPException(409, detail={
+                "violations": _violations_json(new_violations)})
+        with conn:
+            conn.executemany(
+                "INSERT INTO lessons (student_id, subject_id, teacher_id, "
+                "room_id, timeslot_id) VALUES (?, ?, ?, ?, ?)",
+                [(l.student_id, l.subject_id, l.teacher_id, l.room_id,
+                  l.timeslot_id) for l in new])
+    return {"ok": True, "created": len(new),
+            "skipped_no_slot": skipped_no_slot,
+            "skipped_duplicate": skipped_duplicate,
+            "violations": _violations_json(new_violations)}
+
+
 class LessonPatch(BaseModel):
     student_id: str | None = None
     subject_id: str | None = None

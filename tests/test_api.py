@@ -652,6 +652,88 @@ def test_teacher_day_max_via_api(client):
                           "max_lessons_per_day": 1}
 
 
+def seed_two_weeks(client):
+    """seed_world plus the same slots one week later (Aug 3/4)."""
+    seed_world(client)
+    for sid, date, period in [("mon2-1", "2026-08-03", 1),
+                              ("mon2-2", "2026-08-03", 2),
+                              ("tue2-1", "2026-08-04", 1)]:
+        client.post("/api/timeslots",
+                    json={"id": sid, "date": date, "period": period})
+        client.post("/api/teacher_availability",
+                    json={"teacher_id": "t1", "timeslot_id": sid})
+        for st in ("s1", "s2"):
+            client.post("/api/student_availability",
+                        json={"student_id": st, "timeslot_id": sid})
+
+
+def test_repeat_lessons_over_following_weeks(client):
+    """Selected lessons are stamped onto the same weekday+period of the
+    next N weeks; weeks without a matching slot are skipped, duplicates
+    are not re-created."""
+    seed_two_weeks(client)
+    ids = []
+    for slot in ("mon-1", "tue-1"):
+        r = client.post("/api/lessons", json={
+            "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1", "timeslot_id": slot})
+        ids.append(r.json()["id"])
+
+    r = client.post("/api/lessons/repeat",
+                    json={"lesson_ids": ids, "weeks": 2})
+    assert r.status_code == 200
+    body = r.json()
+    # week+1 exists for both; week+2 slots don't exist
+    assert body["created"] == 2
+    assert body["skipped_no_slot"] == 2
+    slots = sorted(l["timeslot_id"] for l in
+                   client.get("/api/schedule").json()["lessons"])
+    assert slots == ["mon-1", "mon2-1", "tue-1", "tue2-1"]
+
+    # running it again creates nothing new
+    r = client.post("/api/lessons/repeat",
+                    json={"lesson_ids": ids, "weeks": 1}).json()
+    assert (r["created"], r["skipped_duplicate"]) == (0, 2)
+
+
+def test_repeat_conflicts_use_caution_flow(client):
+    """A copy that collides with an existing lesson is 409 unless
+    forced, exactly like a manual add."""
+    seed_two_weeks(client)
+    lid = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"}).json()["id"]
+    # occupy the target: s1 already busy at mon2-1
+    client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon2-2"})
+    client.post("/api/lessons", json={
+        "student_id": "s2", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon2-1"})   # room r1 is full
+    r = client.post("/api/lessons/repeat",
+                    json={"lesson_ids": [lid], "weeks": 1})
+    assert r.status_code == 409
+    assert r.json()["detail"]["violations"]
+    r = client.post("/api/lessons/repeat",
+                    json={"lesson_ids": [lid], "weeks": 1, "force": True})
+    assert r.status_code == 200
+    assert r.json()["created"] == 1
+    assert r.json()["violations"]
+
+
+def test_repeat_validates_input(client):
+    seed_world(client)
+    assert client.post("/api/lessons/repeat",
+                       json={"lesson_ids": [999], "weeks": 1}
+                       ).status_code == 404
+    assert client.post("/api/lessons/repeat",
+                       json={"lesson_ids": [], "weeks": 1}
+                       ).status_code == 422
+    assert client.post("/api/lessons/repeat",
+                       json={"lesson_ids": [1], "weeks": 0}
+                       ).status_code == 422
+
+
 def test_lesson_lock_guards_moves_edits_and_deletion(client):
     """A locked lesson refuses PATCH/DELETE (409) until unlocked, and
     survives Clear schedule."""

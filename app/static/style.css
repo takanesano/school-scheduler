@@ -129,6 +129,10 @@ button.small {
 .lesson-card.locked { border-color: #b58a2a; background: #fbf3dd; }
 .lesson-card.locked .lock { right: 3px; opacity: 1; }
 .lesson-card.locked[draggable="false"] { cursor: default; }
+.lesson-card.selected { outline: 2px solid var(--accent);
+                        outline-offset: 1px; }
+.selecting .lesson-card { cursor: pointer; }
+.select-bar { margin: 0 0 0.6rem; }
 .lesson-card.editing { cursor: default; padding-right: 0.4rem; }
 .lesson-edit select { width: 100%; margin: 0.12rem 0; font-size: 0.78rem;
                       padding: 0.15rem 0.3rem; }

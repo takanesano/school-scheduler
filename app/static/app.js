@@ -13,6 +13,8 @@ const OBJ_LABELS = {
 const state = { tab: "schedule", keep: false, caution: true,
                 compress: true, exact: false, exactBudget: 8,
                 lastGen: null,
+                selectMode: false, selectedLessons: new Set(),
+                repeatWeeks: 4,
                 objOrder: Object.keys(OBJ_LABELS),
                 hiddenTeachers: new Set(), hiddenStudents: new Set(),
                 filterSort: "name",
@@ -1114,11 +1116,83 @@ async function renderSchedule(root) {
   // drag-and-drop between timeslots
   const badIds = new Set(schedule.violations.flatMap(v => v.lesson_ids));
   const totalLessons = schedule.lessons.length;
-  const grid = el(`<div class="panel"><h2>Timetable
+  // prune selection of lessons that no longer exist
+  const liveIds = new Set(schedule.lessons.map(l => l.id));
+  state.selectedLessons = new Set(
+    [...state.selectedLessons].filter(id => liveIds.has(id)));
+  const nSel = state.selectedLessons.size;
+
+  const grid = el(`<div class="panel${state.selectMode ? " selecting" : ""}"><h2>Timetable
     <span class="muted" id="lesson-count">(${totalLessons} lessons)</span></h2>
     <p class="muted">Drag a lesson card onto another timeslot to move it.
       Moves that break a constraint are rejected with an explanation;
-      confirm to override.</p></div>`);
+      confirm to override.</p>
+    <div class="row select-bar">
+      <button class="action secondary" id="sel-mode">${
+        state.selectMode ? "✓ selecting — click lessons" : "Select lessons…"
+      }</button>
+      ${state.selectMode || nSel ? `
+        <span id="sel-count"${nSel ? "" : ' class="muted"'}>${nSel} selected</span>
+        <label class="gen-inline">repeat over the next
+          <input type="number" id="rep-weeks" min="1" max="12"
+            value="${state.repeatWeeks}" style="width:4rem"> week(s)</label>
+        <button class="action" id="rep-go"${nSel ? "" : " disabled"}>Repeat</button>
+        <button class="action secondary" id="sel-clear"${nSel ? "" : " disabled"}>Clear selection</button>
+      ` : ""}
+    </div></div>`);
+  $("#sel-mode", grid).onclick = () => {
+    state.selectMode = !state.selectMode;
+    if (!state.selectMode) state.selectedLessons.clear();
+    render();
+  };
+  const selClear = $("#sel-clear", grid);
+  if (selClear) {
+    selClear.onclick = () => { state.selectedLessons.clear(); render(); };
+  }
+  const repGo = $("#rep-go", grid);
+  const selCount = $("#sel-count", grid);
+  const updateSelBar = () => {
+    const n = state.selectedLessons.size;
+    if (selCount) {
+      selCount.textContent = `${n} selected`;
+      selCount.classList.toggle("muted", !n);
+    }
+    if (repGo) repGo.disabled = !n;
+    if (selClear) selClear.disabled = !n;
+  };
+  if (repGo) {
+    repGo.onclick = async () => {
+      const weeks = parseInt($("#rep-weeks", grid).value, 10);
+      if (!(weeks >= 1 && weeks <= 12)) {
+        return toast("weeks must be between 1 and 12", true);
+      }
+      state.repeatWeeks = weeks;
+      const body = { lesson_ids: [...state.selectedLessons], weeks };
+      const report = (res) => {
+        let msg = `Created ${res.created} lesson(s)`;
+        if (res.skipped_duplicate) {
+          msg += ` · ${res.skipped_duplicate} already existed`;
+        }
+        if (res.skipped_no_slot) {
+          msg += ` · ${res.skipped_no_slot} skipped (no matching timeslot)`;
+        }
+        toast(msg, res.created === 0);
+      };
+      try {
+        report(await api("POST", "/api/lessons/repeat", body));
+        render();
+      } catch (e) {
+        if (await appConfirm(
+          `Repeating breaks constraints:\n\n${e.message}`, "Repeat anyway")) {
+          try {
+            report(await api("POST", "/api/lessons/repeat",
+              { ...body, force: true }));
+            render();
+          } catch (e2) { toast(e2.message, true); }
+        }
+      }
+    };
+  }
 
   // ---- visibility filter: toggle teachers / students on and off
   const filterActive = state.hiddenTeachers.size || state.hiddenStudents.size;
@@ -1352,10 +1426,12 @@ async function renderSchedule(root) {
         <b>${esc(entry.teacher_name)}</b></div>`);
       for (const l of entry.lessons) {
         const locked = lockedIds.has(l.lesson_id);
+        const selected = state.selectedLessons.has(l.lesson_id);
         // locked lessons can't be dragged, edited or deleted — only the
-        // lock button stays active, so a stray drag can't move them
-        const card = el(`<div class="lesson-card${badIds.has(l.lesson_id) ? " bad" : ""}${locked ? " locked" : ""}"
-          draggable="${locked ? "false" : "true"}" data-lesson-id="${l.lesson_id}"
+        // lock button stays active, so a stray drag can't move them.
+        // In select mode dragging is off for everyone: clicks select.
+        const card = el(`<div class="lesson-card${badIds.has(l.lesson_id) ? " bad" : ""}${locked ? " locked" : ""}${selected ? " selected" : ""}"
+          draggable="${locked || state.selectMode ? "false" : "true"}" data-lesson-id="${l.lesson_id}"
           data-student-id="${l.student_id}">
           ${esc(l.student_name)} — ${esc(l.subject_name)}
           <span class="muted">· ${esc(l.room_name)}</span>
@@ -1364,11 +1440,25 @@ async function renderSchedule(root) {
             : "lock in place (survives generate and clear)"}">${locked ? "🔒" : "🔓"}</button>
           ${locked ? "" : `<button class="edit" title="edit teacher / room / subject">✎</button>
           <button class="del" title="delete">×</button>`}</div>`);
-        if (!locked) {
-          card.ondragstart = (e) => {
-            e.dataTransfer.setData("text/plain", String(l.lesson_id));
-            e.dataTransfer.effectAllowed = "move";
+        if (state.selectMode) {
+          card.onclick = (e) => {
+            if (e.target.closest("button")) return;
+            if (state.selectedLessons.has(l.lesson_id)) {
+              state.selectedLessons.delete(l.lesson_id);
+            } else {
+              state.selectedLessons.add(l.lesson_id);
+            }
+            card.classList.toggle("selected");
+            updateSelBar();
           };
+        }
+        if (!locked) {
+          if (!state.selectMode) {
+            card.ondragstart = (e) => {
+              e.dataTransfer.setData("text/plain", String(l.lesson_id));
+              e.dataTransfer.effectAllowed = "move";
+            };
+          }
           $(".edit", card).onclick = () =>
             openEditor(card, l, entry.teacher_id);
           $(".del", card).onclick = async () => {

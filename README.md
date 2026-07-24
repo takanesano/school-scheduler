@@ -136,7 +136,14 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   **edit its subject, teacher, or room in place**. The 🔓/🔒 button
   **locks a lesson in place**: locked lessons are always pinned when
   generating (both solvers schedule around them), survive "Clear
-  schedule", and refuse drags, edits and deletion until unlocked. While choosing, every
+  schedule", and refuse drags, edits and deletion until unlocked.
+  **Select lessons…** turns on selection mode: click cards to select
+  several lessons, then **repeat them over the next N weeks** — each
+  copy lands on the same weekday and period with the same student,
+  subject, teacher and room. Weeks without a matching timeslot and
+  copies that already exist are skipped (the result message says how
+  many); conflicting copies go through the usual confirm-to-override
+  flow. While choosing, every
   dropdown option is marked ✓/✗ live (would the lesson be valid with that
   choice?), and the current combination's would-be violations are shown
   before you save. Manual additions and
