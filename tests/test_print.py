@@ -111,6 +111,52 @@ def test_overview_xlsx_structure():
     assert not any("数学" in t or "教室" in t for t in texts)
 
 
+def test_batch_xlsx_one_sheet_per_person():
+    """students/teachers workbooks carry one worksheet per person with
+    the transposed day×period layout."""
+    import io
+
+    from openpyxl import load_workbook
+
+    from app.export_xlsx import students_xlsx, teachers_xlsx
+    d = make_data()
+    sv = [build_student_view(d, LESSONS, s) for s in ("s1", "s2")]
+    wb = load_workbook(io.BytesIO(students_xlsx(sv, STAMP)))
+    assert wb.sheetnames == ["葵 (s1)", "蓮 (s2)"]
+    ws = wb["蓮 (s2)"]
+    assert ws.cell(row=1, column=2).value.startswith("①")
+    assert ws.cell(row=2, column=1).value == "7/27(月)"
+    assert ws.cell(row=2, column=2).value == "英語(鈴木)"   # s2 Mon P1
+    assert ws.cell(row=3, column=2).value == "数学(田中)"   # s2 Wed P1
+
+    tv = [build_teacher_view(d, LESSONS, t) for t in ("t1", "t2")]
+    wb = load_workbook(io.BytesIO(teachers_xlsx(tv, STAMP)))
+    assert wb.sheetnames == ["田中 (t1)", "鈴木 (t2)"]
+    assert wb["田中 (t1)"].cell(row=2, column=2).value == "葵(数学)"
+
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        students_xlsx([], STAMP)
+
+
+def test_batch_xlsx_endpoints(tmp_path):
+    from fastapi.testclient import TestClient as TC
+    app.state.db_path = tmp_path / "xlsx2.db"
+    try:
+        with TC(app) as c:
+            seed(c)
+            for url in ("/api/print/students.xlsx",
+                        "/api/print/teachers.xlsx?ids=t1"):
+                r = c.get(url)
+                assert r.status_code == 200
+                assert "spreadsheetml" in r.headers["content-type"]
+                assert r.content[:2] == b"PK"
+            assert c.get(
+                "/api/print/students.xlsx?ids=ghost").status_code == 404
+    finally:
+        del app.state.db_path
+
+
 def test_overview_xlsx_endpoint(tmp_path):
     from fastapi.testclient import TestClient as TC
     app.state.db_path = tmp_path / "xlsx.db"

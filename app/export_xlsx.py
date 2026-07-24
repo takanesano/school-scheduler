@@ -26,26 +26,54 @@ SAT = Font(color="1E3CBE")
 BOLD = Font(bold=True)
 
 
-def overview_xlsx(view: dict, generated_at: str) -> bytes:
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "時間割 全体表"
-
+def _days_periods_labels(view: dict):
     days = [c for w in view["weeks"] for c in w if c["in_term"]]
-    periods = view["periods"]
-    n_sub = max((len(s["entries"]) for d in days for s in d["slots"]),
-                default=1) or 1
     label_of: dict[int, str] = {}
     for d in days:
         for s in d["slots"]:
             if s["label"] and s["period"] not in label_of:
                 label_of[s["period"]] = s["label"]
+    return days, view["periods"], label_of
+
+
+def _sheet_title(name: str, entity_id: str) -> str:
+    """Excel-safe, unique worksheet title (31-char limit, no []:*?/\\)."""
+    clean = "".join(ch for ch in name if ch not in "[]:*?/\\")
+    suffix = f" ({entity_id})"
+    return clean[:31 - len(suffix)] + suffix
+
+
+def _page_setup(ws, view: dict, generated_at: str) -> None:
+    ws.freeze_panes = "B2"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = "1:1"
+    ws.oddFooter.left.text = \
+        f"期間 {term_label(view)} ・ 作成 {generated_at}"
+    ws.oddFooter.right.text = "&P / &N ページ"
+
+
+def _header_cell(cell) -> None:
+    cell.font = BOLD
+    cell.fill = HEAD_FILL
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+
+def overview_xlsx(view: dict, generated_at: str) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "時間割 全体表"
+
+    days, periods, label_of = _days_periods_labels(view)
+    n_sub = max((len(s["entries"]) for d in days for s in d["slots"]),
+                default=1) or 1
 
     # ---- header row: 日付 | ① 09:00-10:10 (merged over 2 cols) | …
-    ws.cell(row=1, column=1, value="日付").font = BOLD
-    ws.cell(row=1, column=1).fill = HEAD_FILL
-    ws.cell(row=1, column=1).alignment = Alignment(
-        horizontal="center", vertical="center")
+    ws.cell(row=1, column=1, value="日付")
+    _header_cell(ws.cell(row=1, column=1))
     for i, p in enumerate(periods):
         c0 = 2 + i * 2
         head = _circled(p)
@@ -53,10 +81,7 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
             head += f" {label_of[p]}"
         ws.merge_cells(start_row=1, start_column=c0,
                        end_row=1, end_column=c0 + 1)
-        cell = ws.cell(row=1, column=c0, value=head)
-        cell.font = BOLD
-        cell.fill = HEAD_FILL
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        _header_cell(ws.cell(row=1, column=c0, value=head))
 
     # ---- one block of n_sub rows per day
     r = 2
@@ -118,16 +143,88 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
     for i in range(len(periods)):
         ws.column_dimensions[get_column_letter(2 + i * 2)].width = 13
         ws.column_dimensions[get_column_letter(3 + i * 2)].width = 22
-    ws.freeze_panes = "B2"
-    ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize = ws.PAPERSIZE_A4
-    ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 0
-    ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.print_title_rows = "1:1"
-    ws.oddFooter.left.text = f"期間 {term_label(view)} ・ 作成 {generated_at}"
-    ws.oddFooter.right.text = "&P / &N ページ"
+    _page_setup(ws, view, generated_at)
 
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _person_sheet(ws, view: dict, generated_at: str, cell_text) -> None:
+    """One transposed personal timetable: day rows × single period
+    columns; ``cell_text(slot) -> str`` renders one slot's entries."""
+    days, periods, label_of = _days_periods_labels(view)
+    ws.cell(row=1, column=1, value="日付")
+    _header_cell(ws.cell(row=1, column=1))
+    for i, p in enumerate(periods):
+        head = _circled(p)
+        if label_of.get(p):
+            head += f" {label_of[p]}"
+        _header_cell(ws.cell(row=1, column=2 + i, value=head))
+    r = 2
+    for day in days:
+        d = dt.date.fromisoformat(day["date"])
+        wd = day["weekday"]
+        date_cell = ws.cell(row=r, column=1,
+                            value=f"{d.month}/{d.day}({WEEKDAY_JA[wd]})")
+        date_cell.alignment = Alignment(horizontal="center",
+                                        vertical="center")
+        if wd == "Sun":
+            date_cell.font = SUN
+        elif wd == "Sat":
+            date_cell.font = SAT
+        slots = {s["period"]: s for s in day["slots"]}
+        for i, p in enumerate(periods):
+            cell = ws.cell(row=r, column=2 + i)
+            slot = slots.get(p)
+            if slot is None:
+                cell.fill = GREY
+            elif slot["entries"]:
+                cell.value = cell_text(slot)
+        r += 1
+    for row in range(1, r):
+        for col in range(1, 2 + len(periods)):
+            ws.cell(row=row, column=col).border = Border(
+                left=MEDIUM, right=MEDIUM,
+                top=MEDIUM if row <= 2 else THIN,
+                bottom=MEDIUM if row in (1, r - 1) else THIN)
+    ws.column_dimensions["A"].width = 10
+    for i in range(len(periods)):
+        ws.column_dimensions[get_column_letter(2 + i)].width = 18
+    _page_setup(ws, view, generated_at)
+
+
+def _batch_xlsx(views: list[dict], generated_at: str,
+                title_of, cell_text) -> bytes:
+    if not views:
+        raise ValueError("nothing to export")
+    wb = Workbook()
+    wb.remove(wb.active)
+    for v in views:
+        ws = wb.create_sheet(title=title_of(v))
+        _person_sheet(ws, v, generated_at, cell_text)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def students_xlsx(views: list[dict], generated_at: str) -> bytes:
+    """One workbook, one worksheet per student; each slot cell shows
+    the subject and teacher (rooms omitted)."""
+    return _batch_xlsx(
+        views, generated_at,
+        lambda v: _sheet_title(v["student_name"], v["student_id"]),
+        lambda slot: "、".join(
+            f"{e['subject_name']}({e['teacher_name']})"
+            for e in slot["entries"]))
+
+
+def teachers_xlsx(views: list[dict], generated_at: str) -> bytes:
+    """One workbook, one worksheet per teacher; each slot cell shows
+    the students with their subject (rooms omitted)."""
+    return _batch_xlsx(
+        views, generated_at,
+        lambda v: _sheet_title(v["teacher_name"], v["teacher_id"]),
+        lambda slot: "、".join(
+            f"{e['student_name']}({e['subject_name']})"
+            for e in slot["entries"]))

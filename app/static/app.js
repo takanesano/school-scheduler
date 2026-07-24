@@ -1471,8 +1471,12 @@ async function renderCalendars(root) {
         (Excel)</a>
       <a class="action secondary" href="/api/print/students.pdf"
         target="_blank">all students</a>
+      <a class="action secondary" href="/api/print/students.xlsx">all
+        students (Excel)</a>
       <a class="action secondary" href="/api/print/teachers.pdf"
         target="_blank">all teachers</a>
+      <a class="action secondary" href="/api/print/teachers.xlsx">all
+        teachers (Excel)</a>
     </div></div>`);
   $("#cal-view", ctrl).onchange = (e) => { state.calView = e.target.value; render(); };
   const personSel = $("#cal-person", ctrl);

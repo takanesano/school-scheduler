@@ -909,12 +909,57 @@ def print_overview_xlsx(date_from: str | None = None,
     data = load_dataset(conn)
     view = print_pdf.clip_view(
         views.build_overview(data, load_lessons(conn)), date_from, date_to)
+    return _xlsx_response(export_xlsx.overview_xlsx(view, _now_stamp()),
+                          "schedule-overview.xlsx")
+
+
+def _xlsx_response(content: bytes, filename: str) -> Response:
     return Response(
-        content=export_xlsx.overview_xlsx(view, _now_stamp()),
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument"
                    ".spreadsheetml.sheet",
         headers={"Content-Disposition":
-                 'attachment; filename="schedule-overview.xlsx"'})
+                 f'attachment; filename="{filename}"'})
+
+
+@app.get("/api/print/students.xlsx")
+def print_students_xlsx(ids: str | None = None,
+                        date_from: str | None = None,
+                        date_to: str | None = None,
+                        conn: sqlite3.Connection = Depends(get_conn)):
+    date_from, date_to = (_iso_or_422(date_from, "date_from"),
+                          _iso_or_422(date_to, "date_to"))
+    data = load_dataset(conn)
+    lessons = load_lessons(conn)
+    wanted = _ids_or_all(ids, data.students, "student",
+                         lambda s: data.students[s])
+    vs = [print_pdf.clip_view(
+        views.build_student_view(data, lessons, s), date_from, date_to)
+        for s in wanted]
+    if not vs:
+        raise HTTPException(404, "No students to export")
+    return _xlsx_response(export_xlsx.students_xlsx(vs, _now_stamp()),
+                          "schedule-students.xlsx")
+
+
+@app.get("/api/print/teachers.xlsx")
+def print_teachers_xlsx(ids: str | None = None,
+                        date_from: str | None = None,
+                        date_to: str | None = None,
+                        conn: sqlite3.Connection = Depends(get_conn)):
+    date_from, date_to = (_iso_or_422(date_from, "date_from"),
+                          _iso_or_422(date_to, "date_to"))
+    data = load_dataset(conn)
+    lessons = load_lessons(conn)
+    wanted = _ids_or_all(ids, data.teachers, "teacher",
+                         lambda t: data.teachers[t])
+    vs = [print_pdf.clip_view(
+        views.build_teacher_view(data, lessons, t), date_from, date_to)
+        for t in wanted]
+    if not vs:
+        raise HTTPException(404, "No teachers to export")
+    return _xlsx_response(export_xlsx.teachers_xlsx(vs, _now_stamp()),
+                          "schedule-teachers.xlsx")
 
 
 @app.get("/api/print/students.pdf")
