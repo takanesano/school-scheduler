@@ -37,6 +37,44 @@ const TABS = [
 
 // ------------------------------------------------------------------ helpers
 
+// Big people × slots grids: scroll inside the box with STICKY headers
+// (top row(s) and the name column stay visible), plus a hover
+// cross-highlight so a cell is easy to trace to its row and column.
+let _gridSeq = 0;
+function enhanceGrid(wrap) {
+  const table = $("table", wrap);
+  if (!table) return;
+  wrap.classList.add("grid-scroll");
+  const id = table.id || (table.id = `grid-${++_gridSeq}`);
+  // two-row headers: the second row sticks below the first one
+  requestAnimationFrame(() => {
+    const rows = table.tHead ? table.tHead.rows : [];
+    if (rows.length > 1 && rows[0].offsetHeight) {
+      table.style.setProperty("--head1-h", rows[0].offsetHeight + "px");
+    }
+  });
+  // column highlight: swap ONE stylesheet rule instead of touching
+  // hundreds of cells per mousemove
+  const style = document.createElement("style");
+  wrap.append(style);
+  let last = 0;
+  table.addEventListener("mouseover", (e) => {
+    const cell = e.target.closest("td, th");
+    if (!cell || cell.closest("table") !== table) return;
+    const idx = cell.cellIndex + 1;
+    if (idx === last) return;
+    last = idx;
+    style.textContent = idx <= 1 ? "" :
+      `#${id} tbody td:nth-child(${idx}),
+       #${id} thead tr:last-child th:nth-child(${idx}) {
+         box-shadow: inset 0 0 0 999px rgba(47, 111, 237, 0.12); }`;
+  });
+  table.addEventListener("mouseleave", () => {
+    style.textContent = "";
+    last = 0;
+  });
+}
+
 function toast(msg, isError = false) {
   const t = $("#toast");
   t.textContent = msg;
@@ -222,7 +260,7 @@ async function renderTeachers(root) {
     const grid = el(`<div class="panel"><h2>Who can teach what</h2>
       <p class="muted">Click a cell to toggle. ✓ = the teacher can teach
         that subject.</p>
-      <div style="overflow-x:auto"><table class="grid-table"><thead><tr>
+      <div class="grid-scroll"><table class="grid-table"><thead><tr>
         <th></th>${subjects.map(s =>
           `<th>${esc(s.name)}</th>`).join("")}</tr></thead>
       <tbody></tbody></table></div></div>`);
@@ -252,6 +290,7 @@ async function renderTeachers(root) {
       }
       gbody.append(tr);
     }
+    enhanceGrid($(".grid-scroll", grid));
     root.append(grid);
   } else if (teachers.length) {
     root.append(el(`<div class="panel"><p class="muted">
@@ -501,7 +540,7 @@ async function renderAvailGrid(root, title, people, entity, idCol, slots) {
   }
   const panel = el(`<div class="panel"><h2>${title}</h2>
     <p class="muted">Click a cell to toggle. ✓ = available.</p>
-    <div style="overflow-x:auto"><table class="grid-table"><thead>
+    <div class="grid-scroll"><table class="grid-table"><thead>
       <tr><th></th>${dates.map(d =>
         `<th colspan="${d.slots.length}">${fmtDate(d.date)}<br>
          <span class="muted">${weekdayOf(d.date)}</span></th>`).join("")}</tr>
@@ -532,6 +571,7 @@ async function renderAvailGrid(root, title, people, entity, idCol, slots) {
     }
     tbody.append(tr);
   }
+  enhanceGrid($(".grid-scroll", panel));
   root.append(panel);
 }
 
@@ -1672,7 +1712,7 @@ async function renderAssignments(root) {
       ✕ = no assignment. The soft preference's rank among the other
       goals is the draggable "${esc(OBJ_LABELS.student_teacher_pair)}"
       card in the Generate panel.</p>
-    <div style="overflow-x:auto"><table class="grid-table"><thead><tr>
+    <div class="grid-scroll"><table class="grid-table"><thead><tr>
       <th></th>${teachers.map(t =>
         `<th>${esc(t.name)}</th>`).join("")}</tr></thead>
     <tbody></tbody></table></div></div>`);
@@ -1725,6 +1765,14 @@ async function renderAssignments(root) {
           } catch (e3) { toast(e3.message, true); render(); }
         };
         td.append(pop);
+        // flip upward when the cell sits near the bottom of the
+        // scrolling grid box, so the chooser is never clipped
+        const box = td.closest(".grid-scroll");
+        if (box) {
+          const r = td.getBoundingClientRect();
+          const c = box.getBoundingClientRect();
+          if (r.bottom + 44 > c.bottom) pop.classList.add("up");
+        }
         popEl = pop;
       };
       tr.append(td);
@@ -1736,6 +1784,7 @@ async function renderAssignments(root) {
       Add students and teachers first.</p></div>`));
     return;
   }
+  enhanceGrid($(".grid-scroll", panel));
   root.append(panel);
 }
 
