@@ -1140,9 +1140,11 @@ async function renderSchedule(root) {
         <button class="action secondary" id="sel-clear"${nSel ? "" : " disabled"}>Clear selection</button>
       ` : ""}
     </div></div>`);
+  // leaving select mode KEEPS the selection (it survives re-entering
+  // the mode, tab switches, filters…); only "Clear selection" — or the
+  // selected lessons disappearing — resets it
   $("#sel-mode", grid).onclick = () => {
     state.selectMode = !state.selectMode;
-    if (!state.selectMode) state.selectedLessons.clear();
     render();
   };
   const selClear = $("#sel-clear", grid);
