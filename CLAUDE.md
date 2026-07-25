@@ -153,7 +153,13 @@ weeks and marks non-term days `in_term: false`.
   duplicates (counts reported), 409-unless-force on violations
   involving the new copies. Copies are plain unlocked lessons even
   when the source is locked. Selection is pruned against live lesson
-  ids on each render.
+  ids on each render and SURVIVES leaving select mode (only
+  Clear-selection resets it). `POST /api/lessons/bulk_update
+  {lesson_ids, subject_id?/teacher_id?/room_id?, force}` changes the
+  provided fields on all given lessons at once (locked ones skipped +
+  counted; unknown refs 422; combined result validated,
+  409-unless-force on violations involving the changed ids) — UI:
+  "change selected to:" row with (keep …) dropdowns.
 - Lesson moves (drag-and-drop) and inline edits (✎ button: subject /
   teacher / room dropdowns in the card) both go through
   `PATCH /api/lessons/{id}` via the shared `patchLesson` caution flow,
