@@ -126,7 +126,18 @@ button.small {
 .tt-head h2 { margin: 0; }
 .tt-undo { margin-left: auto; }
 /* assignments grid: 0 = hard pair (red), 1-9 = soft preference (blue) */
-.pair-cell { cursor: pointer; text-align: center; color: var(--muted); }
+.pair-cell { cursor: pointer; text-align: center; color: var(--muted);
+             position: relative; }
+.pair-pop { position: absolute; top: 100%; left: 50%;
+            transform: translateX(-50%); z-index: 15;
+            display: flex; gap: 0.25rem; padding: 0.3rem 0.4rem;
+            background: var(--panel); border: 1px solid var(--border);
+            border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
+.pair-pop button { border: 1px solid transparent; cursor: pointer;
+                   font: inherit; }
+.pair-pop button.active { outline: 2px solid var(--accent); }
+.pair-pop button[disabled] { opacity: 0.35; cursor: default; }
+.pair-badge.pair-clear { background: var(--bg); color: var(--muted); }
 td.pair-hard { background: #f6d5d3; color: #8f1d18; font-weight: 700; }
 td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
 .pair-badge { display: inline-block; min-width: 1.2rem; text-align: center;

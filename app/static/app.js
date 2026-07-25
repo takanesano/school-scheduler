@@ -1662,20 +1662,23 @@ async function renderAssignments(root) {
     pairs.map(p => [`${p.student_id}|${p.teacher_id}`, p.priority]));
 
   const panel = el(`<div class="panel"><h2>Teacher in charge</h2>
-    <p class="muted">Click a cell to cycle:
+    <p class="muted">Click a cell, then pick:
       <span class="pair-badge pair-hard">0</span> = the student
-      <b>must</b> be taught by this teacher (hard rule) →
+      <b>must</b> be taught by this teacher (hard rule);
       <span class="pair-badge pair-soft">1</span>
       <span class="pair-badge pair-soft">2</span>
       <span class="pair-badge pair-soft">3</span> = preferred, other
-      teachers allowed but penalized (smaller number = stronger) →
-      blank = no assignment. The soft preference's rank among the other
+      teachers allowed but penalized (smaller number = stronger);
+      ✕ = no assignment. The soft preference's rank among the other
       goals is the draggable "${esc(OBJ_LABELS.student_teacher_pair)}"
       card in the Generate panel.</p>
     <div style="overflow-x:auto"><table class="grid-table"><thead><tr>
       <th></th>${teachers.map(t =>
         `<th>${esc(t.name)}</th>`).join("")}</tr></thead>
     <tbody></tbody></table></div></div>`);
+  let popEl = null;
+  const closePop = () => { if (popEl) { popEl.remove(); popEl = null; } };
+  panel.addEventListener("click", closePop);
   const tbody = $("tbody", panel);
   for (const st of students) {
     const tr = document.createElement("tr");
@@ -1687,25 +1690,42 @@ async function renderAssignments(root) {
         k === 0 ? " pair-hard" : k !== undefined ? " pair-soft" : ""}">${
         k !== undefined ? k : "·"}</td>`);
       td.title = k === 0
-        ? `${st.name} must be taught by ${t.name} — click for soft (1)`
+        ? `${st.name} must be taught by ${t.name}`
         : k !== undefined
-          ? `preference ${k} — click to weaken (max 3, then clears)`
-          : `click to assign ${t.name} to ${st.name} (starts hard, 0)`;
-      td.onclick = async () => {
-        try {
-          if (k === undefined) {
-            await api("POST", "/api/teacher_students",
-              { teacher_id: t.id, student_id: st.id, priority: 0 });
-          } else if (k >= 3) {
-            await api("DELETE",
-              `/api/teacher_students?teacher_id=${encodeURIComponent(t.id)}`
-              + `&student_id=${encodeURIComponent(st.id)}`);
-          } else {
-            await api("POST", "/api/teacher_students",
-              { teacher_id: t.id, student_id: st.id, priority: k + 1 });
-          }
-          render();
-        } catch (e) { toast(e.message, true); }
+          ? `${t.name} preferred for ${st.name} (strength ${k})`
+          : `click to assign ${t.name} to ${st.name}`;
+      td.onclick = (ev) => {
+        ev.stopPropagation();
+        closePop();
+        const pop = el(`<div class="pair-pop">
+          <button class="pair-badge pair-hard${k === 0 ? " active" : ""}"
+            data-v="0" title="must (hard rule)">0</button>
+          ${[1, 2, 3].map(v =>
+            `<button class="pair-badge pair-soft${k === v ? " active" : ""}"
+              data-v="${v}" title="preferred (strength ${v})">${v}</button>`
+          ).join("")}
+          <button class="pair-badge pair-clear" data-v=""
+            title="remove the assignment"${
+            k === undefined ? " disabled" : ""}>✕</button></div>`);
+        pop.onclick = async (e2) => {
+          e2.stopPropagation();
+          const b = e2.target.closest("button");
+          if (!b || b.disabled) return;
+          try {
+            if (b.dataset.v === "") {
+              await api("DELETE",
+                `/api/teacher_students?teacher_id=${encodeURIComponent(t.id)}`
+                + `&student_id=${encodeURIComponent(st.id)}`);
+            } else {
+              await api("POST", "/api/teacher_students",
+                { teacher_id: t.id, student_id: st.id,
+                  priority: parseInt(b.dataset.v, 10) });
+            }
+            render();
+          } catch (e3) { toast(e3.message, true); render(); }
+        };
+        td.append(pop);
+        popEl = pop;
       };
       tr.append(td);
     }
