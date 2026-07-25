@@ -160,6 +160,18 @@ weeks and marks non-term days `in_term: false`.
   counted; unknown refs 422; combined result validated,
   409-unless-force on violations involving the changed ids) — UI:
   "change selected to:" row with (keep …) dropdowns.
+- UNDO (manual edits only): every mutating lesson endpoint (add /
+  PATCH / bulk_update / repeat / delete) calls `_push_undo(conn,
+  label)` right after its 409-gate and before writing — a full JSON
+  snapshot of the lessons table (ids + locked included) into the
+  `undo_stack` table, capped at UNDO_LIMIT=20. `POST
+  /api/schedule/undo` restores the newest snapshot verbatim (explicit
+  ids on reinsert keep older snapshots valid); IntegrityError (master
+  data deleted since) drops the stale entry and 409s. Generate and
+  Clear call `_clear_undo` — undo must NEVER roll back a solver
+  result. GET /api/schedule carries `undo: {count, label}` for the
+  ↩ Undo button; only push when a change actually happens (repeat
+  created=0 / bulk all-locked must not push).
 - Lesson moves (drag-and-drop) and inline edits (✎ button: subject /
   teacher / room dropdowns in the card) both go through
   `PATCH /api/lessons/{id}` via the shared `patchLesson` caution flow,

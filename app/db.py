@@ -87,6 +87,16 @@ CREATE TABLE IF NOT EXISTS lessons (
     -- user-locked lessons survive generate/clear and refuse moves
     locked      INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1))
 );
+
+-- undo history for MANUAL timetable edits: each row is a full JSON
+-- snapshot of the lessons table taken just before one edit. Solver
+-- runs (generate) and Clear schedule wipe the stack instead of
+-- pushing to it.
+CREATE TABLE IF NOT EXISTS undo_stack (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    label    TEXT NOT NULL,
+    snapshot TEXT NOT NULL
+);
 """
 
 

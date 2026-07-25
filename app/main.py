@@ -540,6 +540,39 @@ class LessonIn(BaseModel):
     force: bool = False   # allow saving despite violations
 
 
+UNDO_LIMIT = 20
+
+
+def _push_undo(conn: sqlite3.Connection, label: str) -> None:
+    """Snapshot the lessons table just before one MANUAL edit. Undo
+    restores the latest snapshot verbatim (original ids included)."""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, student_id, subject_id, teacher_id, room_id, "
+        "timeslot_id, locked FROM lessons ORDER BY id")]
+    with conn:
+        conn.execute(
+            "INSERT INTO undo_stack (label, snapshot) VALUES (?, ?)",
+            (label, json.dumps(rows)))
+        conn.execute(
+            "DELETE FROM undo_stack WHERE id NOT IN "
+            "(SELECT id FROM undo_stack ORDER BY id DESC LIMIT ?)",
+            (UNDO_LIMIT,))
+
+
+def _clear_undo(conn: sqlite3.Connection) -> None:
+    """Solver runs and Clear schedule reset the manual-edit history —
+    undo must never silently roll back a generated schedule."""
+    with conn:
+        conn.execute("DELETE FROM undo_stack")
+
+
+def _undo_info(conn: sqlite3.Connection) -> dict:
+    row = conn.execute("SELECT COUNT(*) AS n FROM undo_stack").fetchone()
+    last = conn.execute("SELECT label FROM undo_stack "
+                        "ORDER BY id DESC LIMIT 1").fetchone()
+    return {"count": row["n"], "label": last["label"] if last else None}
+
+
 def _violations_json(vs):
     return [{"code": v.code, "message": v.message,
              "lesson_ids": [i for i in v.lesson_ids if i is not None]}
@@ -606,6 +639,7 @@ def generate_schedule(opts: GenerateOptions,
                 require_consecutive=_hard_consecutive(s),
                 objective_order=capped + rest,
                 single_day_max=s["single_day_max"])
+    _clear_undo(conn)
     with conn:
         conn.execute("DELETE FROM lessons")
         conn.executemany(
@@ -654,6 +688,7 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
                       "slot_spread": slot_spread, "total_days": total_days,
                       "teacher_single_days": single_days,
                       "day_spread": day_spread},
+        "undo": _undo_info(conn),
     }
 
 
@@ -668,6 +703,7 @@ def add_lesson(item: LessonIn, conn: sqlite3.Connection = Depends(get_conn)):
         if None in v.lesson_ids]  # violations involving the new lesson
     if new_violations and not item.force:
         raise HTTPException(409, detail={"violations": _violations_json(new_violations)})
+    _push_undo(conn, "add lesson")
     with conn:
         cur = conn.execute(
             "INSERT INTO lessons (student_id, subject_id, teacher_id, room_id, timeslot_id) "
@@ -731,6 +767,7 @@ def repeat_lessons(body: RepeatIn,
         if new_violations and not body.force:
             raise HTTPException(409, detail={
                 "violations": _violations_json(new_violations)})
+        _push_undo(conn, "repeat lessons")
         with conn:
             conn.executemany(
                 "INSERT INTO lessons (student_id, subject_id, teacher_id, "
@@ -799,6 +836,7 @@ def bulk_update_lessons(body: BulkUpdateIn,
         if new_violations and not body.force:
             raise HTTPException(409, detail={
                 "violations": _violations_json(new_violations)})
+        _push_undo(conn, "edit selected lessons")
         with conn:
             conn.executemany(
                 "UPDATE lessons SET subject_id=?, teacher_id=?, room_id=? "
@@ -858,6 +896,7 @@ def update_lesson(lesson_id: int, patch: LessonPatch,
         if lesson_id in v.lesson_ids]
     if new_violations and not patch.force:
         raise HTTPException(409, detail={"violations": _violations_json(new_violations)})
+    _push_undo(conn, "move/edit lesson")
     with conn:
         conn.execute(
             "UPDATE lessons SET student_id=?, subject_id=?, teacher_id=?, "
@@ -939,6 +978,7 @@ def delete_lesson(lesson_id: int, conn: sqlite3.Connection = Depends(get_conn)):
     if row["locked"]:
         raise HTTPException(
             409, "This lesson is locked — unlock it before deleting it")
+    _push_undo(conn, "delete lesson")
     with conn:
         conn.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
     return {"ok": True}
@@ -948,11 +988,49 @@ def delete_lesson(lesson_id: int, conn: sqlite3.Connection = Depends(get_conn)):
 def clear_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     """Clear the schedule. Locked lessons survive — unlock them (or
     delete them individually) to remove them."""
+    _clear_undo(conn)
     with conn:
         cur = conn.execute("DELETE FROM lessons WHERE locked = 0")
     kept = conn.execute(
         "SELECT COUNT(*) AS n FROM lessons").fetchone()["n"]
     return {"ok": True, "deleted": cur.rowcount, "kept_locked": kept}
+
+
+@app.post("/api/schedule/undo")
+def undo_last_edit(conn: sqlite3.Connection = Depends(get_conn)):
+    """Revert the last MANUAL timetable edit (add / move / edit / bulk
+    edit / repeat / delete). Solver runs and Clear schedule reset the
+    history, so undo never rolls back a generated schedule."""
+    row = conn.execute("SELECT id, label, snapshot FROM undo_stack "
+                       "ORDER BY id DESC LIMIT 1").fetchone()
+    if row is None:
+        raise HTTPException(404, "Nothing to undo")
+    rows = json.loads(row["snapshot"])
+    try:
+        with conn:
+            conn.execute("DELETE FROM undo_stack WHERE id = ?",
+                         (row["id"],))
+            conn.execute("DELETE FROM lessons")
+            conn.executemany(
+                "INSERT INTO lessons (id, student_id, subject_id, "
+                "teacher_id, room_id, timeslot_id, locked) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(r["id"], r["student_id"], r["subject_id"],
+                  r["teacher_id"], r["room_id"], r["timeslot_id"],
+                  r["locked"]) for r in rows])
+    except sqlite3.IntegrityError:
+        # the snapshot references data that no longer exists (e.g. a
+        # deleted student) — drop the stale entry instead of failing
+        # forever
+        with conn:
+            conn.execute("DELETE FROM undo_stack WHERE id = ?",
+                         (row["id"],))
+        raise HTTPException(
+            409, "Cannot undo: students/teachers/rooms/timeslots have "
+                 "changed since that edit")
+    left = conn.execute(
+        "SELECT COUNT(*) AS n FROM undo_stack").fetchone()["n"]
+    return {"ok": True, "undid": row["label"], "remaining": left}
 
 
 @app.get("/api/schedule/check")

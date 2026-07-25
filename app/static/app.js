@@ -1128,6 +1128,11 @@ async function renderSchedule(root) {
       Moves that break a constraint are rejected with an explanation;
       confirm to override.</p>
     <div class="row select-bar">
+      <button class="action secondary" id="undo-btn"${
+        (schedule.undo || {}).count ? "" : " disabled"} title="${
+        (schedule.undo || {}).count
+          ? `undo: ${esc(schedule.undo.label)}` : "nothing to undo"
+      }">↩ Undo</button>
       <button class="action secondary" id="sel-mode">${
         state.selectMode ? "✓ selecting — click lessons" : "Select lessons…"
       }</button>
@@ -1151,6 +1156,13 @@ async function renderSchedule(root) {
         ${opt(rooms, r => r.name)}</select>
       <button class="action" id="bulk-go"${nSel ? "" : " disabled"}>Apply</button>
     </div>` : ""}</div>`);
+  $("#undo-btn", grid).onclick = async () => {
+    try {
+      const res = await api("POST", "/api/schedule/undo");
+      toast(`Undid: ${res.undid}`);
+    } catch (e) { toast(e.message, true); }
+    render();
+  };
   // leaving select mode KEEPS the selection (it survives re-entering
   // the mode, tab switches, filters…); only "Clear selection" — or the
   // selected lessons disappearing — resets it
