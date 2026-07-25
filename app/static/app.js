@@ -1158,7 +1158,14 @@ async function renderSchedule(root) {
 
   // calendar of all lessons: delete buttons, violation highlighting, and
   // drag-and-drop between timeslots
-  const badIds = new Set(schedule.violations.flatMap(v => v.lesson_ids));
+  // lesson id -> the violation messages it is involved in, so a red
+  // card can explain itself on hover
+  const badMsgs = {};
+  for (const v of schedule.violations) {
+    for (const id of v.lesson_ids || []) {
+      if (id != null) (badMsgs[id] ??= []).push(v.message);
+    }
+  }
   const totalLessons = schedule.lessons.length;
   // prune selection of lessons that no longer exist
   const liveIds = new Set(schedule.lessons.map(l => l.id));
@@ -1537,7 +1544,9 @@ async function renderSchedule(root) {
         // locked lessons can't be dragged, edited or deleted — only the
         // lock button stays active, so a stray drag can't move them.
         // In select mode dragging is off for everyone: clicks select.
-        const card = el(`<div class="lesson-card${badIds.has(l.lesson_id) ? " bad" : ""}${locked ? " locked" : ""}${selected ? " selected" : ""}"
+        const bad = badMsgs[l.lesson_id];
+        const card = el(`<div class="lesson-card${bad ? " bad" : ""}${locked ? " locked" : ""}${selected ? " selected" : ""}"
+          ${bad ? `title="${esc("⚠ " + bad.join("\n⚠ "))}"` : ""}
           draggable="${locked || state.selectMode ? "false" : "true"}" data-lesson-id="${l.lesson_id}"
           data-student-id="${l.student_id}">
           ${esc(l.student_name)} — ${esc(l.subject_name)}
