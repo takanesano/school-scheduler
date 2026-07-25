@@ -721,6 +721,100 @@ def test_repeat_conflicts_use_caution_flow(client):
     assert r.json()["violations"]
 
 
+def test_undo_reverts_manual_edits_in_order(client):
+    """Undo walks back manual edits one at a time: bulk edit, then
+    delete, then a move — restoring ids and fields exactly."""
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    for slot in ("mon-1", "mon-2", "tue-1"):
+        client.post("/api/teacher_availability",
+                    json={"teacher_id": "t2", "timeslot_id": slot})
+    lid = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"}).json()["id"]
+
+    def snap():
+        return {(l["id"], l["teacher_id"], l["timeslot_id"]) for l in
+                client.get("/api/schedule").json()["lessons"]}
+
+    after_add = snap()
+    client.patch(f"/api/lessons/{lid}", json={"timeslot_id": "tue-1"})
+    after_move = snap()
+    client.post("/api/lessons/bulk_update",
+                json={"lesson_ids": [lid], "teacher_id": "t2"})
+    client.delete(f"/api/lessons/{lid}")
+    assert snap() == set()
+
+    undo = client.get("/api/schedule").json()["undo"]
+    assert undo["count"] == 4 and undo["label"] == "delete lesson"
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "delete lesson"
+    assert snap() == {(lid, "t2", "tue-1")}
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "edit selected lessons"
+    assert snap() == after_move
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "move/edit lesson"
+    assert snap() == after_add
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "add lesson"
+    assert snap() == set()
+    assert client.post("/api/schedule/undo").status_code == 404
+
+
+def test_undo_covers_repeat_and_preserves_locks(client):
+    seed_two_weeks(client)
+    lid = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"}).json()["id"]
+    client.post(f"/api/lessons/{lid}/lock", json={"locked": True})
+    client.post("/api/lessons/repeat",
+                json={"lesson_ids": [lid], "weeks": 1})
+    assert len(client.get("/api/schedule").json()["lessons"]) == 2
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "repeat lessons"
+    lessons = client.get("/api/schedule").json()["lessons"]
+    assert [(l["id"], l["locked"]) for l in lessons] == [(lid, True)]
+
+
+def test_generate_and_clear_reset_undo_history(client):
+    seed_world(client)
+    client.post("/api/student_needs", json={
+        "student_id": "s1", "subject_id": "math", "sessions": 1})
+    client.post("/api/lessons", json={
+        "student_id": "s2", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-2"})
+    assert client.get("/api/schedule").json()["undo"]["count"] == 1
+    client.post("/api/schedule/generate", json={})
+    assert client.get("/api/schedule").json()["undo"]["count"] == 0
+    assert client.post("/api/schedule/undo").status_code == 404
+    client.post("/api/lessons", json={
+        "student_id": "s2", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-2", "force": True})
+    assert client.get("/api/schedule").json()["undo"]["count"] == 1
+    client.delete("/api/schedule")
+    assert client.get("/api/schedule").json()["undo"]["count"] == 0
+
+
+def test_undo_with_vanished_references_fails_cleanly(client):
+    """If the snapshot references since-deleted master data, undo says
+    so once and drops the stale entry."""
+    seed_world(client)
+    client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"})
+    client.patch("/api/lessons/1", json={"timeslot_id": "mon-2"})
+    client.delete("/api/students/s1")      # cascades the lesson away
+    r = client.post("/api/schedule/undo")  # snapshot references s1
+    assert r.status_code == 409
+    assert "changed" in r.json()["detail"]
+    # the stale entry is gone; the next one may fail the same way but
+    # the stack never gets stuck
+    assert client.get("/api/schedule").json()["undo"]["count"] == 1
+
+
 def test_bulk_update_changes_selected_lessons(client):
     """Teacher/subject/room apply to all given lessons at once; locked
     lessons are skipped and reported."""
