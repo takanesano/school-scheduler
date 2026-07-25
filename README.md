@@ -134,7 +134,11 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   at once** ("change selected to:", pick only the fields to change).
   Weeks without a matching timeslot, existing copies, and locked
   lessons are skipped (the result message says how many); conflicting
-  changes go through the usual confirm-to-override flow. While choosing, every
+  changes go through the usual confirm-to-override flow. **↩ Undo**
+  walks back the last manual edits one at a time (add, move, edit,
+  bulk change, repeat, delete — up to 20 steps); generating or
+  clearing the schedule resets the undo history, so undo never rolls
+  back a solver result. While choosing, every
   dropdown option is marked ✓/✗ live (would the lesson be valid with that
   choice?), and the current combination's would-be violations are shown
   before you save. Manual additions and
