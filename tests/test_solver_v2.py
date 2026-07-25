@@ -66,6 +66,7 @@ def test_lexicographic_weights_dominate_in_order():
 def test_lexicographic_weights_follow_custom_order():
     w = ObjectiveWeights.lexicographic(
         ["teacher_working_day", "student_double_day", "student_day_gap",
+         "student_teacher_pair",
          "teacher_single_day", "teacher_day_spread",
          "teacher_slot_spread"])
     assert w.teacher_working_day > w.student_double_day \
@@ -82,6 +83,7 @@ def test_objective_terms_and_weighted_cost():
                Lesson("s2", "eng", "t2", "r1", "tue-1")]
     terms = objective_terms(d, lessons)
     assert terms == {"student_double_day": 1, "student_day_gap": 0,
+                     "student_teacher_pair": 0,
                      "teacher_slot_spread": 1, "teacher_working_day": 2,
                      "teacher_single_day": 1, "teacher_day_spread": 0,
                      "changed_lesson": 0}
@@ -319,7 +321,8 @@ def test_cpsat_enforces_promoted_objective_cap():
     d = make_data()
     d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
     days_first = ObjectiveWeights.lexicographic(
-        ["student_double_day", "student_day_gap", "teacher_working_day",
+        ["student_double_day", "student_day_gap", "student_teacher_pair",
+         "teacher_working_day",
          "teacher_single_day", "teacher_slot_spread",
          "teacher_day_spread"])
     free = solve_v2(d, config=SolverConfig(weights=days_first))
@@ -347,7 +350,7 @@ def test_always_active_is_stronger_than_any_priority_order():
     demoted = ObjectiveWeights.lexicographic(
         ["teacher_working_day", "teacher_slot_spread",
          "teacher_single_day", "teacher_day_spread", "student_day_gap",
-         "student_double_day"])
+         "student_teacher_pair", "student_double_day"])
 
     free = solve_v2(d, config=SolverConfig(weights=demoted))
     assert objective_terms(d, free.lessons)["student_double_day"] == 1
@@ -481,6 +484,35 @@ def test_cpsat_respects_teacher_day_max():
     assert validate(d, r.lessons) == []
     dates = {d.timeslots[l.timeslot_id].date for l in r.lessons}
     assert len(dates) == 2
+
+
+def test_cpsat_honors_hard_pair():
+    """Priority-0 assignments are enforced in the model itself: no
+    variable is even created for other teachers."""
+    d = make_data()
+    d.teacher_students = {("s1", "t2"): 0}
+    d.student_needs = {("s1", "math"): 2, ("s2", "eng"): 1}
+    r = solve_v2(d)
+    assert r.backend == "cpsat"
+    assert r.complete
+    assert validate(d, r.lessons) == []
+    assert {l.teacher_id for l in r.lessons
+            if l.student_id == "s1"} == {"t2"}
+
+
+def test_cpsat_honors_soft_pair_when_prioritized():
+    """With the pair term weighted, the reference pull toward the
+    unassigned teacher loses: the CP answer teaches s1 with t2."""
+    d = make_data()
+    d.teacher_students = {("s1", "t2"): 1}
+    d.student_needs = {("s1", "math"): 1}
+    reference = [Lesson("s1", "math", "t1", "r1", "mon-1")]
+    cfg = SolverConfig(weights=ObjectiveWeights(
+        student_teacher_pair=1000, changed_lesson=1))
+    r = solve_v2(d, config=cfg, reference=reference)
+    assert r.backend == "cpsat"
+    assert objective_terms(d, r.lessons)["student_teacher_pair"] == 0
+    assert [l.teacher_id for l in r.lessons] == ["t2"]
 
 
 def test_cpsat_higher_day_cap_contiguous_triple():

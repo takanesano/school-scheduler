@@ -61,6 +61,21 @@ weeks and marks non-term days `in_term: false`.
   /api/teachers omitting the field keeps the stored value (renames
   must not reset it — dedicated TeacherIn route, teachers are no
   longer in SIMPLE_TABLES).
+- H11 is the ASSIGNED-TEACHER rule: `teacher_students` table →
+  `Dataset.teacher_students[(student, teacher)] = priority` (0-9).
+  Priority 0 = hard whitelist (`hard_pair_teachers`; code
+  `student_teacher_mismatch`; enforced in validate, `_State.fits`, CP
+  var FILTERING — vars for other teachers are never created — and
+  check_input_problems). Priorities 1-9 feed the SEVENTH objective
+  term `student_teacher_pair` = `pair_miss_points`: each lesson whose
+  student has assignments but an unassigned teacher costs
+  (10 - strongest soft priority) points; CP encodes it as direct
+  coefficients on x vars (no aux vars; pinned lessons offset the cap).
+  v1's greedy ranks assigned teachers first (candidates() sort key).
+  UI: Assignments tab grid, click cycles blank→0→1→2→3→blank (4-9 via
+  API/CSV only). OBJECTIVE_TERMS is 7-wide — objective tuples,
+  lexicographic magnitudes and the /api/schedule objective payload
+  (`pair_miss`) all grew with it.
 - H8 is the STUDENT DAY rule (always on; the old optional per-subject
   spread flag `one_subject_session_per_day` is GONE from every signature
   and the API): max two lessons per student per calendar day
