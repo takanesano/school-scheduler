@@ -1139,7 +1139,18 @@ async function renderSchedule(root) {
         <button class="action" id="rep-go"${nSel ? "" : " disabled"}>Repeat</button>
         <button class="action secondary" id="sel-clear"${nSel ? "" : " disabled"}>Clear selection</button>
       ` : ""}
-    </div></div>`);
+    </div>
+    ${state.selectMode || nSel ? `
+    <div class="row select-bar">
+      <span class="muted">change selected to:</span>
+      <select id="bulk-subject"><option value="">(keep subject)</option>
+        ${opt(subjects, s => s.name)}</select>
+      <select id="bulk-teacher"><option value="">(keep teacher)</option>
+        ${opt(teachers, t => t.name)}</select>
+      <select id="bulk-room"><option value="">(keep room)</option>
+        ${opt(rooms, r => r.name)}</select>
+      <button class="action" id="bulk-go"${nSel ? "" : " disabled"}>Apply</button>
+    </div>` : ""}</div>`);
   // leaving select mode KEEPS the selection (it survives re-entering
   // the mode, tab switches, filters…); only "Clear selection" — or the
   // selected lessons disappearing — resets it
@@ -1152,6 +1163,7 @@ async function renderSchedule(root) {
     selClear.onclick = () => { state.selectedLessons.clear(); render(); };
   }
   const repGo = $("#rep-go", grid);
+  const bulkGo = $("#bulk-go", grid);
   const selCount = $("#sel-count", grid);
   const updateSelBar = () => {
     const n = state.selectedLessons.size;
@@ -1160,8 +1172,44 @@ async function renderSchedule(root) {
       selCount.classList.toggle("muted", !n);
     }
     if (repGo) repGo.disabled = !n;
+    if (bulkGo) bulkGo.disabled = !n;
     if (selClear) selClear.disabled = !n;
   };
+  if (bulkGo) {
+    bulkGo.onclick = async () => {
+      const body = { lesson_ids: [...state.selectedLessons] };
+      for (const [field, sel] of [["subject_id", "#bulk-subject"],
+                                  ["teacher_id", "#bulk-teacher"],
+                                  ["room_id", "#bulk-room"]]) {
+        const v = $(sel, grid).value;
+        if (v) body[field] = v;
+      }
+      if (!body.subject_id && !body.teacher_id && !body.room_id) {
+        return toast("choose a subject, teacher or room to change", true);
+      }
+      const report = (res) => {
+        let msg = `Updated ${res.updated} lesson(s)`;
+        if (res.skipped_locked) {
+          msg += ` · ${res.skipped_locked} locked lesson(s) skipped`;
+        }
+        toast(msg, res.updated === 0);
+      };
+      try {
+        report(await api("POST", "/api/lessons/bulk_update", body));
+        render();
+      } catch (e) {
+        if (await appConfirm(
+          `This change breaks constraints:\n\n${e.message}`,
+          "Change anyway")) {
+          try {
+            report(await api("POST", "/api/lessons/bulk_update",
+              { ...body, force: true }));
+            render();
+          } catch (e2) { toast(e2.message, true); }
+        }
+      }
+    };
+  }
   if (repGo) {
     repGo.onclick = async () => {
       const weeks = parseInt($("#rep-weeks", grid).value, 10);

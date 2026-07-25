@@ -743,6 +743,73 @@ def repeat_lessons(body: RepeatIn,
             "violations": _violations_json(new_violations)}
 
 
+class BulkUpdateIn(BaseModel):
+    lesson_ids: list[int] = Field(min_length=1)
+    # only the provided fields change; omitted ones are kept per lesson
+    subject_id: str | None = None
+    teacher_id: str | None = None
+    room_id: str | None = None
+    force: bool = False
+
+
+@app.post("/api/lessons/bulk_update")
+def bulk_update_lessons(body: BulkUpdateIn,
+                        conn: sqlite3.Connection = Depends(get_conn)):
+    """Change the subject/teacher/room of several lessons at once.
+    Locked lessons are skipped (reported); the combined result is
+    validated like any edit — 409 with the violations unless force."""
+    changes = {k: v for k, v in [("subject_id", body.subject_id),
+                                 ("teacher_id", body.teacher_id),
+                                 ("room_id", body.room_id)]
+               if v is not None}
+    if not changes:
+        raise HTTPException(
+            422, "Nothing to change — provide subject_id, teacher_id "
+                 "and/or room_id")
+    data = load_dataset(conn)
+    for key, pool in [("subject_id", data.subjects),
+                      ("teacher_id", data.teachers),
+                      ("room_id", data.rooms)]:
+        if key in changes and changes[key] not in pool:
+            raise HTTPException(422, f"Unknown {key} '{changes[key]}'")
+
+    lessons = load_lessons(conn)
+    by_id = {l.id: l for l in lessons}
+    missing = [i for i in body.lesson_ids if i not in by_id]
+    if missing:
+        raise HTTPException(
+            404, f"No such lesson(s): {', '.join(map(str, missing))}")
+    targets = [by_id[i] for i in body.lesson_ids]
+    todo = [l for l in targets if not l.locked]
+    skipped_locked = len(targets) - len(todo)
+
+    new_violations = []
+    if todo:
+        updated = [Lesson(l.student_id,
+                          changes.get("subject_id", l.subject_id),
+                          changes.get("teacher_id", l.teacher_id),
+                          changes.get("room_id", l.room_id),
+                          l.timeslot_id, id=l.id) for l in todo]
+        changed_ids = {l.id for l in todo}
+        proposed = [l for l in lessons
+                    if l.id not in changed_ids] + updated
+        new_violations = [
+            v for v in _validate_with_settings(conn, data, proposed)
+            if changed_ids & set(v.lesson_ids)]
+        if new_violations and not body.force:
+            raise HTTPException(409, detail={
+                "violations": _violations_json(new_violations)})
+        with conn:
+            conn.executemany(
+                "UPDATE lessons SET subject_id=?, teacher_id=?, room_id=? "
+                "WHERE id=?",
+                [(l.subject_id, l.teacher_id, l.room_id, l.id)
+                 for l in updated])
+    return {"ok": True, "updated": len(todo),
+            "skipped_locked": skipped_locked,
+            "violations": _violations_json(new_violations)}
+
+
 class LessonPatch(BaseModel):
     student_id: str | None = None
     subject_id: str | None = None
