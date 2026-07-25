@@ -86,6 +86,10 @@ class Dataset:
     teacher_subjects: set[tuple[str, str]] = field(default_factory=set)
     # teacher id -> max lessons on one calendar day (absent = no limit)
     teacher_day_max: dict[str, int] = field(default_factory=dict)
+    # (student, teacher) -> assignment priority: 0 = the student MUST be
+    # taught by this teacher (hard whitelist), 1..9 = soft preference
+    # (smaller = stronger)
+    teacher_students: dict[tuple[str, str], int] = field(default_factory=dict)
     student_needs: dict[tuple[str, str], int] = field(default_factory=dict)
     teacher_availability: set[tuple[str, str]] = field(default_factory=set)
     student_availability: set[tuple[str, str]] = field(default_factory=set)
@@ -208,6 +212,20 @@ def validate(data: Dataset, lessons: list[Lesson],
                     f"(max {tcap} teachers)",
                     *[l.id for l in ls])
 
+    # H11: students with a priority-0 teacher assignment may ONLY be
+    # taught by (one of) their assigned teacher(s)
+    hard_pairs = hard_pair_teachers(data)
+    for l in known:
+        allowed = hard_pairs.get(l.student_id)
+        if allowed and l.teacher_id not in allowed:
+            names = ", ".join(sorted(
+                data.teachers.get(t, t) for t in allowed))
+            bad("student_teacher_mismatch",
+                f"Student {data.students[l.student_id]} must be taught "
+                f"by {names} (assigned, priority 0), not "
+                f"{data.teachers.get(l.teacher_id, l.teacher_id)}",
+                l.id)
+
     # H10: per-teacher daily lesson cap (teachers.max_lessons_per_day;
     # absent/0 = no limit)
     by_teacher_date: dict[tuple[str, str], list[Lesson]] = defaultdict(list)
@@ -320,6 +338,8 @@ class _State:
         # (student, date) -> set of occupied period numbers
         self.student_day: dict[tuple[str, str], set[int]] = defaultdict(set)
         self.teacher_day: Counter = Counter()        # (t, date) -> lessons
+        # H11: student -> hard whitelist of allowed teachers
+        self.hard_pairs = hard_pair_teachers(data)
 
     def fits(self, st: str, su: str, t: str, r: str, s: str) -> bool:
         if self.teacher_load[(t, s)] >= self.teacher_capacity:
@@ -336,6 +356,9 @@ class _State:
         tdm = self.data.teacher_day_max.get(t)
         if tdm and self.teacher_day[(t, slot.date)] >= tdm:
             return False                       # H10: teacher's daily cap
+        allowed = self.hard_pairs.get(st)
+        if allowed is not None and t not in allowed:
+            return False                       # H11: assigned teacher only
         periods = self.student_day[(st, slot.date)]
         if len(periods) >= self.student_day_cap:
             return False                       # H8: daily cap reached
@@ -388,6 +411,17 @@ def check_input_problems(data: Dataset) -> list[str]:
                 f"No teacher can teach {data.subjects[su]} "
                 f"(needed by {data.students[st]})")
             continue
+        allowed = hard_pair_teachers(data).get(st)
+        if allowed is not None:
+            teachers = [t for t in teachers if t in allowed]
+            if not teachers:
+                names = ", ".join(sorted(
+                    data.teachers.get(t, t) for t in allowed))
+                problems.append(
+                    f"{data.students[st]} must be taught by {names} "
+                    f"(assigned, priority 0), but none of them can "
+                    f"teach {data.subjects[su]}")
+                continue
         slots = {s for s in data.timeslots
                  if (st, s) in data.student_availability
                  and any((t, s) in data.teacher_availability for t in teachers)}
@@ -445,12 +479,14 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
 
     def candidates(st: str, su: str,
                    limit: int | None = None) -> list[tuple[str, str, str]]:
-        # least-loaded teachers first, so lessons spread evenly from the
-        # start instead of piling onto the alphabetically-first teacher.
+        # assigned teachers first (strongest priority first), then
+        # least-loaded, so lessons spread evenly from the start instead
+        # of piling onto the alphabetically-first teacher.
         # ``limit`` stops the scan early — enough for MRV counting, which
         # only needs to know whether this pair beats the current minimum.
         ranked = sorted(teachers_for.get(su, []),
-                        key=lambda t: (state.teacher_total[t], t))
+                        key=lambda t: (data.teacher_students.get((st, t), 99),
+                                       state.teacher_total[t], t))
         opts = []
         for i, s in enumerate(slot_ids):
             if (st, s) not in data.student_availability:
@@ -628,17 +664,48 @@ def student_double_days(data: Dataset, lessons: list[Lesson]) -> int:
 # consecutive) is hard by default only because the DEFAULT SETTINGS cap
 # it at 0 — demoting it makes it an ordinary soft preference.
 OBJECTIVE_TERMS = ("student_double_day", "student_day_gap",
+                   "student_teacher_pair",
                    "teacher_slot_spread", "teacher_working_day",
                    "teacher_single_day", "teacher_day_spread")
 
 OBJECTIVE_LABELS = {
     "student_double_day": "Student days with two or more lessons",
     "student_day_gap": "Student days with non-consecutive lessons",
+    "student_teacher_pair": "Lessons not taught by the assigned teacher",
     "teacher_slot_spread": "Lesson-count spread between teachers",
     "teacher_working_day": "Total teacher working days",
     "teacher_single_day": "Teacher days with too few lessons",
     "teacher_day_spread": "Working-day spread between teachers",
 }
+
+
+def hard_pair_teachers(data: Dataset) -> dict[str, set[str]]:
+    """student -> the teachers assigned with priority 0. A non-empty set
+    is a hard whitelist: that student may ONLY be taught by them."""
+    out: dict[str, set[str]] = {}
+    for (st, t), k in data.teacher_students.items():
+        if k == 0:
+            out.setdefault(st, set()).add(t)
+    return out
+
+
+def pair_miss_points(data: Dataset, lessons: list[Lesson]) -> int:
+    """Soft assignment term: every lesson whose student has ≥1 assigned
+    teacher but is taught by an UNASSIGNED one costs (10 - k) points,
+    k = the student's strongest soft priority (so ignoring a priority-1
+    assignment costs 9, a priority-9 one costs 1)."""
+    paired: dict[str, set[str]] = {}
+    strength: dict[str, int] = {}
+    for (st, t), k in data.teacher_students.items():
+        paired.setdefault(st, set()).add(t)
+        if k > 0:
+            strength[st] = min(strength.get(st, 9), k)
+    pts = 0
+    for l in lessons:
+        ts = paired.get(l.student_id)
+        if ts and l.teacher_id not in ts:
+            pts += 10 - strength.get(l.student_id, 9)
+    return pts
 
 
 def teacher_single_days(data: Dataset, lessons: list[Lesson],
@@ -678,6 +745,7 @@ def objective_term_values(data: Dataset,
     return {
         "student_double_day": student_double_days(data, lessons),
         "student_day_gap": student_gap_days(data, lessons),
+        "student_teacher_pair": pair_miss_points(data, lessons),
         "teacher_slot_spread":
             (max(slot_counts) - min(slot_counts)) if slot_counts else 0,
         "teacher_working_day":

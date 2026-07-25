@@ -86,6 +86,18 @@ def test_parse_bad_teacher_day_max():
     assert "max_lessons_per_day" in e.value.errors[0]
 
 
+def test_parse_teacher_students_priority():
+    got = csv_io.parse_csv("teacher_students",
+                           "teacher_id,student_id\nt1,s1\n")
+    assert got == [{"teacher_id": "t1", "student_id": "s1",
+                    "priority": "1"}]
+    with pytest.raises(csv_io.CsvError) as e:
+        csv_io.parse_csv(
+            "teacher_students",
+            "teacher_id,student_id,priority\nt1,s1,10\n")
+    assert "priority" in e.value.errors[0]
+
+
 def test_parse_bad_teacher_capacity():
     with pytest.raises(csv_io.CsvError) as e:
         csv_io.parse_csv(

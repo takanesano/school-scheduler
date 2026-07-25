@@ -138,6 +138,19 @@ button.small {
            margin-bottom: 0.8rem; }
 .tt-head h2 { margin: 0; }
 .tt-undo { margin-left: auto; }
+/* assignments grid: 0 = hard pair (red), 1-9 = soft preference (blue) */
+.pair-cell { cursor: pointer; text-align: center; color: var(--muted); }
+td.pair-hard { background: #f6d5d3; color: #8f1d18; font-weight: 700; }
+td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
+.pair-badge { display: inline-block; min-width: 1.2rem; text-align: center;
+              border-radius: 3px; font-size: 0.78rem; font-weight: 700;
+              padding: 0 0.15rem; }
+.pair-badge.pair-hard { background: #f6d5d3; color: #8f1d18; }
+.pair-badge.pair-soft { background: #d7e3fb; color: #1d3f8f; }
+@media (prefers-color-scheme: dark) {
+  td.pair-hard, .pair-badge.pair-hard { background: #4a2320; color: #f2a9a3; }
+  td.pair-soft, .pair-badge.pair-soft { background: #223558; color: #a8c2f5; }
+}
 .lesson-card.editing { cursor: default; padding-right: 0.4rem; }
 .lesson-edit select { width: 100%; margin: 0.12rem 0; font-size: 0.78rem;
                       padding: 0.15rem 0.3rem; }

@@ -39,7 +39,8 @@ from dataclasses import dataclass, field, replace
 
 from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, SolveResult,
                         _slot_sort_key, coverage_report, eligible_teachers,
-                        objective_term_values, optimize_teacher_days, solve,
+                        hard_pair_teachers, objective_term_values,
+                        optimize_teacher_days, pair_miss_points, solve,
                         validate)
 
 
@@ -55,6 +56,8 @@ class ObjectiveWeights:
 
     student_double_day: float = 0.0   # per (student, day) with 2 lessons
     student_day_gap: float = 0.0      # per (student, day) non-contiguous
+    student_teacher_pair: float = 0.0  # per pair-miss POINT (see
+    #                                    scheduler.pair_miss_points)
     teacher_slot_spread: float = 0.0  # per lesson of max-min load spread
     teacher_working_day: float = 0.0  # per (teacher, day) worked
     teacher_single_day: float = 0.0   # per (teacher, day) with at most
@@ -76,7 +79,8 @@ class ObjectiveWeights:
         if sorted(order) != sorted(OBJECTIVE_TERMS):
             raise ValueError(
                 f"order must be a permutation of {OBJECTIVE_TERMS}")
-        magnitudes = [10_000_000_000.0, 100_000_000.0, 1_000_000.0,
+        magnitudes = [1_000_000_000_000.0, 10_000_000_000.0,
+                      100_000_000.0, 1_000_000.0,
                       10_000.0, 100.0, 1.0]
         return cls(**{name: magnitudes[i] for i, name in enumerate(order)})
 
@@ -300,14 +304,32 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         if rem > 0:
             remaining[(st, su)] = rem
 
+    # H11 hard whitelists and soft assignment-miss weights
+    hard_pairs = hard_pair_teachers(data)
+    pair_of: dict[str, set] = {}
+    strength: dict[str, int] = {}
+    for (st, t), k in data.teacher_students.items():
+        pair_of.setdefault(st, set()).add(t)
+        if k > 0:
+            strength[st] = min(strength.get(st, 9), k)
+
+    def miss_weight(st, t):
+        ts = pair_of.get(st)
+        if ts and t not in ts:
+            return 10 - strength.get(st, 9)
+        return 0
+
     m = cp_model.CpModel()
     x: dict[tuple[str, str, str, str, str], object] = {}
     for (st, su), rem in remaining.items():
         combo_vars = []
+        allowed = hard_pairs.get(st)
         for s in slots:
             if (st, s.id) not in data.student_availability:
                 continue
             for t in teachers_for.get(su, []):
+                if allowed is not None and t not in allowed:
+                    continue           # H11: assigned teacher only
                 if (t, s.id) not in data.teacher_availability:
                     continue
                 for r in room_ids:
@@ -514,6 +536,17 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         obj += [int(round(w.student_day_gap)) * gd for gd in gd_vars]
     if "student_day_gap" in caps and not config.require_consecutive:
         m.Add(sum(gd_vars) <= caps["student_day_gap"])
+    if w.student_teacher_pair or "student_teacher_pair" in caps:
+        miss_terms = [(miss_weight(st, t), v)
+                      for (st, su, sid, t, r), v in sorted(x.items())
+                      if miss_weight(st, t)]
+        if w.student_teacher_pair:
+            obj += [int(round(w.student_teacher_pair)) * mw * v
+                    for (mw, v) in miss_terms]
+        if "student_teacher_pair" in caps:
+            pinned_pts = pair_miss_points(data, pinned)
+            m.Add(sum(mw * v for (mw, v) in miss_terms)
+                  <= caps["student_teacher_pair"] - pinned_pts)
     if w.teacher_working_day:
         obj += [int(round(w.teacher_working_day)) * wd for wd in wd_vars]
     if "teacher_working_day" in caps:

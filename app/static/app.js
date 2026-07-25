@@ -4,6 +4,7 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const OBJ_LABELS = {
   student_double_day: "One lesson per day per student",
   student_day_gap: "Multiple lessons on a day must be consecutive",
+  student_teacher_pair: "Students taught by their assigned teacher",
   teacher_slot_spread: "Even lesson counts across teachers",
   teacher_working_day: "Few teacher working days",
   teacher_single_day: "Few teacher days with too few lessons",
@@ -29,6 +30,7 @@ const TABS = [
   ["rooms", "Rooms"],
   ["timeslots", "Timeslots"],
   ["needs", "Student needs"],
+  ["assignments", "Assignments"],
   ["availability", "Availability"],
   ["csv", "CSV import/export"],
 ];
@@ -689,6 +691,7 @@ async function renderSchedule(root) {
   // changes which side a card is on.
   const caps = settings.objective_caps || {};
   const CAP_DEFAULTS = { student_double_day: 0, student_day_gap: 0,
+                         student_teacher_pair: 0,
                          teacher_slot_spread: 1, teacher_working_day: 30,
                          teacher_single_day: 0, teacher_day_spread: 1 };
   let dragKey = null;
@@ -1061,6 +1064,7 @@ async function renderSchedule(root) {
       }</tbody></table></div>
       <p class="muted">Student days with two lessons: ${o.student_double_days} ·
         with non-consecutive lessons: ${o.student_day_gaps} ·
+        assigned-teacher miss points: ${o.pair_miss} ·
         lesson-count spread between teachers (max−min): ${o.slot_spread} ·
         total teacher working days: ${o.total_days} ·
         teacher days with ≤${settings.single_day_max}
@@ -1672,6 +1676,72 @@ async function renderCalendars(root) {
   root.append(panel);
 }
 
+// ---------------------------------------------------------------- assignments
+
+async function renderAssignments(root) {
+  const [students, teachers, pairs] = await Promise.all([
+    list("students"), list("teachers"), list("teacher_students")]);
+  const prio = new Map(
+    pairs.map(p => [`${p.student_id}|${p.teacher_id}`, p.priority]));
+
+  const panel = el(`<div class="panel"><h2>Teacher in charge</h2>
+    <p class="muted">Click a cell to cycle:
+      <span class="pair-badge pair-hard">0</span> = the student
+      <b>must</b> be taught by this teacher (hard rule) →
+      <span class="pair-badge pair-soft">1</span>
+      <span class="pair-badge pair-soft">2</span>
+      <span class="pair-badge pair-soft">3</span> = preferred, other
+      teachers allowed but penalized (smaller number = stronger) →
+      blank = no assignment. The soft preference's rank among the other
+      goals is the draggable "${esc(OBJ_LABELS.student_teacher_pair)}"
+      card in the Generate panel.</p>
+    <div style="overflow-x:auto"><table class="grid-table"><thead><tr>
+      <th></th>${teachers.map(t =>
+        `<th>${esc(t.name)}</th>`).join("")}</tr></thead>
+    <tbody></tbody></table></div></div>`);
+  const tbody = $("tbody", panel);
+  for (const st of students) {
+    const tr = document.createElement("tr");
+    tr.append(el(`<th>${esc(st.name)} (${esc(st.id)})</th>`));
+    for (const t of teachers) {
+      const key = `${st.id}|${t.id}`;
+      const k = prio.get(key);
+      const td = el(`<td class="pair-cell${
+        k === 0 ? " pair-hard" : k !== undefined ? " pair-soft" : ""}">${
+        k !== undefined ? k : "·"}</td>`);
+      td.title = k === 0
+        ? `${st.name} must be taught by ${t.name} — click for soft (1)`
+        : k !== undefined
+          ? `preference ${k} — click to weaken (max 3, then clears)`
+          : `click to assign ${t.name} to ${st.name} (starts hard, 0)`;
+      td.onclick = async () => {
+        try {
+          if (k === undefined) {
+            await api("POST", "/api/teacher_students",
+              { teacher_id: t.id, student_id: st.id, priority: 0 });
+          } else if (k >= 3) {
+            await api("DELETE",
+              `/api/teacher_students?teacher_id=${encodeURIComponent(t.id)}`
+              + `&student_id=${encodeURIComponent(st.id)}`);
+          } else {
+            await api("POST", "/api/teacher_students",
+              { teacher_id: t.id, student_id: st.id, priority: k + 1 });
+          }
+          render();
+        } catch (e) { toast(e.message, true); }
+      };
+      tr.append(td);
+    }
+    tbody.append(tr);
+  }
+  if (!students.length || !teachers.length) {
+    root.append(el(`<div class="panel"><p class="muted">
+      Add students and teachers first.</p></div>`));
+    return;
+  }
+  root.append(panel);
+}
+
 // -------------------------------------------------------------------- router
 
 const RENDERERS = {
@@ -1683,6 +1753,7 @@ const RENDERERS = {
   rooms: renderRooms,
   timeslots: renderTimeslots,
   needs: renderNeeds,
+  assignments: renderAssignments,
   availability: renderAvailability,
   csv: renderCsv,
 };

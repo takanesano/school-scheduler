@@ -53,6 +53,16 @@ CREATE TABLE IF NOT EXISTS teacher_subjects (
     PRIMARY KEY (teacher_id, subject_id)
 );
 
+CREATE TABLE IF NOT EXISTS teacher_students (
+    teacher_id TEXT NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+    student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    -- 0 = the student MUST be taught by this teacher (hard rule);
+    -- 1..9 = soft preference, smaller number = stronger
+    priority   INTEGER NOT NULL DEFAULT 1
+        CHECK (priority BETWEEN 0 AND 9),
+    PRIMARY KEY (teacher_id, student_id)
+);
+
 CREATE TABLE IF NOT EXISTS student_needs (
     student_id        TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
     subject_id        TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,

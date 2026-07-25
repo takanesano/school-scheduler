@@ -314,6 +314,31 @@ def _insert_link(conn, table: str, cols: list[str], values: tuple):
         raise HTTPException(422, f"Unknown reference: {e}")
 
 
+class TeacherStudentIn(BaseModel):
+    teacher_id: str
+    student_id: str
+    # 0 = the student MUST be taught by this teacher; 1-9 = soft
+    priority: int = Field(default=1, ge=0, le=9)
+
+
+@app.post("/api/teacher_students")
+def add_teacher_student(item: TeacherStudentIn, conn=Depends(get_conn)):
+    _insert_link(conn, "teacher_students",
+                 ["teacher_id", "student_id", "priority"],
+                 (item.teacher_id, item.student_id, item.priority))
+    return {"ok": True}
+
+
+@app.delete("/api/teacher_students")
+def del_teacher_student(teacher_id: str, student_id: str,
+                        conn=Depends(get_conn)):
+    with conn:
+        conn.execute(
+            "DELETE FROM teacher_students WHERE teacher_id=? AND student_id=?",
+            (teacher_id, student_id))
+    return {"ok": True}
+
+
 @app.post("/api/teacher_subjects")
 def add_teacher_subject(item: TeacherSubjectIn, conn=Depends(get_conn)):
     _insert_link(conn, "teacher_subjects", ["teacher_id", "subject_id"],
@@ -499,6 +524,10 @@ def load_dataset(conn: sqlite3.Connection) -> Dataset:
     for r in conn.execute("SELECT teacher_id, subject_id FROM teacher_subjects"):
         data.teacher_subjects.add((r["teacher_id"], r["subject_id"]))
     for r in conn.execute(
+            "SELECT teacher_id, student_id, priority FROM teacher_students"):
+        data.teacher_students[(r["student_id"], r["teacher_id"])] = \
+            r["priority"]
+    for r in conn.execute(
             "SELECT student_id, subject_id, sessions FROM student_needs"):
         data.student_needs[(r["student_id"], r["subject_id"])] = r["sessions"]
     for r in conn.execute("SELECT teacher_id, timeslot_id FROM teacher_availability"):
@@ -667,8 +696,8 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     stats = teacher_day_stats(data, lessons)
     sstats = student_day_stats(data, lessons)
     s = get_settings(conn)
-    (double_days, gap_days, slot_spread, total_days, single_days,
-     day_spread) = schedule_objective(
+    (double_days, gap_days, pair_miss, slot_spread, total_days,
+     single_days, day_spread) = schedule_objective(
         data, lessons, single_day_max=s["single_day_max"])
     return {
         "lessons": [l.__dict__ for l in lessons],
@@ -685,6 +714,7 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
             for st in sorted(data.students, key=lambda st: data.students[st])],
         "objective": {"student_double_days": double_days,
                       "student_day_gaps": gap_days,
+                      "pair_miss": pair_miss,
                       "slot_spread": slot_spread, "total_days": total_days,
                       "teacher_single_days": single_days,
                       "day_spread": day_spread},
