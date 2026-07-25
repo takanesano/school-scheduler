@@ -151,6 +151,29 @@ button.small {
 .pair-pop button.active { outline: 2px solid var(--accent); }
 .pair-pop button[disabled] { opacity: 0.35; cursor: default; }
 .pair-badge.pair-clear { background: var(--bg); color: var(--muted); }
+.pair-pop.up { top: auto; bottom: 100%; }
+
+/* scrollable people × slots grids with sticky headers: the header
+   row(s) stay visible while scrolling down, the name column while
+   scrolling right. border-collapse: separate so borders travel with
+   the sticky cells. */
+.grid-scroll { overflow: auto; max-height: 75vh; }
+.grid-scroll table { border-collapse: separate; border-spacing: 0;
+                     border-left: 1px solid var(--border);
+                     border-top: 1px solid var(--border); }
+.grid-scroll th, .grid-scroll td {
+  border: 0; border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); }
+.grid-scroll thead th { position: sticky; top: 0; z-index: 3;
+                        background: var(--bg); }
+.grid-scroll thead tr:nth-child(2) th { top: var(--head1-h, 2.4rem); }
+.grid-scroll tbody th { position: sticky; left: 0; z-index: 2;
+                        background: var(--panel); }
+.grid-scroll thead th:first-child { left: 0; z-index: 4; }
+/* hover cross-highlight (the column half is injected by enhanceGrid) */
+.grid-scroll tbody tr:hover td,
+.grid-scroll tbody tr:hover th {
+  box-shadow: inset 0 0 0 999px rgba(47, 111, 237, 0.12); }
 td.pair-hard { background: #f6d5d3; color: #8f1d18; font-weight: 700; }
 td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
 .pair-badge { display: inline-block; min-width: 1.2rem; text-align: center;
