@@ -133,6 +133,11 @@ button.small {
                         outline-offset: 1px; }
 .selecting .lesson-card { cursor: pointer; }
 .select-bar { margin: 0 0 0.6rem; }
+/* panel header with the global Undo action on the far right */
+.tt-head { display: flex; align-items: center; gap: 0.6rem;
+           margin-bottom: 0.8rem; }
+.tt-head h2 { margin: 0; }
+.tt-undo { margin-left: auto; }
 .lesson-card.editing { cursor: default; padding-right: 0.4rem; }
 .lesson-edit select { width: 100%; margin: 0.12rem 0; font-size: 0.78rem;
                       padding: 0.15rem 0.3rem; }
