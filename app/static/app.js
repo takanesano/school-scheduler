@@ -1122,17 +1122,18 @@ async function renderSchedule(root) {
     [...state.selectedLessons].filter(id => liveIds.has(id)));
   const nSel = state.selectedLessons.size;
 
-  const grid = el(`<div class="panel${state.selectMode ? " selecting" : ""}"><h2>Timetable
-    <span class="muted" id="lesson-count">(${totalLessons} lessons)</span></h2>
+  const grid = el(`<div class="panel${state.selectMode ? " selecting" : ""}">
+    <div class="tt-head"><h2>Timetable
+      <span class="muted" id="lesson-count">(${totalLessons} lessons)</span></h2>
+      <button class="action secondary tt-undo" id="undo-btn"${
+        (schedule.undo || {}).count ? "" : " disabled"} title="${
+        (schedule.undo || {}).count
+          ? `undo: ${esc(schedule.undo.label)}` : "nothing to undo"
+      }">↩ Undo</button></div>
     <p class="muted">Drag a lesson card onto another timeslot to move it.
       Moves that break a constraint are rejected with an explanation;
       confirm to override.</p>
     <div class="row select-bar">
-      <button class="action secondary" id="undo-btn"${
-        (schedule.undo || {}).count ? "" : " disabled"} title="${
-        (schedule.undo || {}).count
-          ? `undo: ${esc(schedule.undo.label)}` : "nothing to undo"
-      }">↩ Undo</button>
       <button class="action secondary" id="sel-mode">${
         state.selectMode ? "✓ selecting — click lessons" : "Select lessons…"
       }</button>
