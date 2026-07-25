@@ -59,6 +59,8 @@ A generated schedule always satisfies these hard constraints:
    are two they must be in **consecutive periods** (no gap in between).
 6. A teacher never exceeds their own **max lessons per day**, when one
    is set on the Teachers tab (0 = no limit).
+7. A student assigned to a teacher with **priority 0** on the
+   Assignments tab is taught by that teacher **only**.
 
 After solving, an optimization pass (on by default, toggleable) improves
 the soft objectives without changing who learns what, in strict priority
@@ -75,7 +77,7 @@ every two-lesson day with its date, plus all four metrics — so each
 objective can be checked at a glance.
 
 The Generate panel shows all rules as **one list**. Locked cards at the
-top are the built-in hard constraints. Below them, the six conditions —
+top are the built-in hard constraints. Below them, the seven conditions —
 one lesson per day per student, multiple-lessons-must-be-consecutive,
 and the four teacher-workload objectives (including "few teacher days
 with at most N lessons", where N is edited on the card) — are
@@ -155,6 +157,15 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   existing (date, period) pairs are skipped, never overwritten.
 - **Student needs** tab — set total sessions per student and subject,
   and which subjects each teacher can teach.
+- **Assignments** tab — who is in charge of whom: click a cell in the
+  student × teacher grid to cycle the pair's rigidity. **0** (red)
+  means the student **must** be taught by that teacher — a hard rule
+  both solvers obey and manual edits are checked against. **1-3**
+  (blue; up to 9 via API/CSV) is a soft preference: other teachers are
+  allowed but each such lesson costs points (stronger preference =
+  more points), minimized as the draggable "Students taught by their
+  assigned teacher" condition — which can itself be made always-active
+  like any other.
 - **Availability** tab — click cells in the per-date grid to toggle
   teacher and student availability.
 - **CSV import/export** tab — upload or download any table as CSV.
@@ -175,6 +186,7 @@ student also removes their availability, needs, and lessons).
 | `rooms.csv` | `id,name,capacity,teacher_capacity` (teacher_capacity optional: max distinct teachers per timeslot, 0 = no limit) |
 | `timeslots.csv` | `id,date,period,label` (date: `YYYY-MM-DD`; label optional, e.g. `09:00-10:10`) |
 | `teacher_subjects.csv` | `teacher_id,subject_id` |
+| `teacher_students.csv` | `teacher_id,student_id,priority` (priority optional: 0 = must, 1-9 = soft preference, default 1) |
 | `student_needs.csv` | `student_id,subject_id,sessions` (total over the term) |
 | `teacher_availability.csv` | `teacher_id,timeslot_id` |
 | `student_availability.csv` | `student_id,timeslot_id` |

@@ -275,7 +275,8 @@ def test_schedule_reports_teacher_stats(client):
     assert body["teacher_stats"] == [
         {"teacher_id": "t1", "name": "Tanaka", "lessons": 2, "days": 2}]
     assert body["objective"] == {"student_double_days": 0,
-                                 "student_day_gaps": 0, "slot_spread": 0,
+                                 "student_day_gaps": 0, "pair_miss": 0,
+                                 "slot_spread": 0,
                                  "total_days": 2, "teacher_single_days": 2,
                                  "day_spread": 0}
     assert body["student_stats"] == [
@@ -423,6 +424,7 @@ def test_generate_honors_objective_order(client):
                     json={"student_id": st, "subject_id": "math",
                           "sessions": 1})
     days_first = ["student_double_day", "student_day_gap",
+                  "student_teacher_pair",
                   "teacher_working_day", "teacher_single_day",
                   "teacher_slot_spread", "teacher_day_spread"]
     r = client.post("/api/schedule/generate",
@@ -557,6 +559,8 @@ ALWAYS_ACTIVE_CASES = [
     ("teacher_working_day", 2),
     ("teacher_single_day", 1),
     ("teacher_day_spread", 2),
+    # s2 is soft-assigned to t2 (priority 1) but taught by t1: 9 points
+    ("student_teacher_pair", 9),
 ]
 
 
@@ -565,13 +569,17 @@ def test_any_condition_can_be_always_active(client, term, value):
     """Nothing is hard-coded: EVERY objective term can be set as always
     active through settings, and each is enforced/reported generically.
     Fixture schedule: t1 teaches s1 twice on Mon (consecutive) and s2
-    once on Tue; t2 exists, teaches math, but has no lessons."""
+    once on Tue; t2 exists, teaches math, but has no lessons; s2 is
+    soft-assigned to t2 (priority 1), which the schedule ignores."""
     seed_world(client)
     client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
     client.post("/api/teacher_subjects",
                 json={"teacher_id": "t2", "subject_id": "math"})
     client.post("/api/teacher_availability",
                 json={"teacher_id": "t2", "timeslot_id": "tue-1"})
+    client.post("/api/teacher_students",
+                json={"teacher_id": "t2", "student_id": "s2",
+                      "priority": 1})
     for st, slot in (("s1", "mon-1"), ("s1", "mon-2"), ("s2", "tue-1")):
         assert client.post("/api/lessons", json={
             "student_id": st, "subject_id": "math", "teacher_id": "t1",
@@ -585,6 +593,67 @@ def test_any_condition_can_be_always_active(client, term, value):
     # cap at the value -> clean again
     client.put("/api/settings", json={"objective_caps": {term: value}})
     assert client.get("/api/schedule").json()["violations"] == []
+
+
+def test_teacher_students_crud_and_hard_pair_flow(client):
+    """The Assignments tab's API: upsert with priority, listing, delete;
+    a priority-0 pair blocks manual adds by other teachers through the
+    usual caution flow."""
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    client.post("/api/teacher_availability",
+                json={"teacher_id": "t2", "timeslot_id": "mon-1"})
+    r = client.post("/api/teacher_students", json={
+        "teacher_id": "t2", "student_id": "s1", "priority": 0})
+    assert r.status_code == 200
+    assert client.get("/api/teacher_students").json() == [
+        {"teacher_id": "t2", "student_id": "s1", "priority": 0}]
+    # upsert changes the priority in place
+    client.post("/api/teacher_students", json={
+        "teacher_id": "t2", "student_id": "s1", "priority": 2})
+    assert client.get("/api/teacher_students").json()[0]["priority"] == 2
+    assert client.post("/api/teacher_students", json={
+        "teacher_id": "t2", "student_id": "s1", "priority": 10}
+        ).status_code == 422
+    assert client.post("/api/teacher_students", json={
+        "teacher_id": "ghost", "student_id": "s1", "priority": 1}
+        ).status_code == 422
+
+    # back to hard: s1 must now be taught by t2
+    client.post("/api/teacher_students", json={
+        "teacher_id": "t2", "student_id": "s1", "priority": 0})
+    base = {"student_id": "s1", "subject_id": "math", "room_id": "r1",
+            "timeslot_id": "mon-1"}
+    r = client.post("/api/lessons", json=dict(base, teacher_id="t1"))
+    assert r.status_code == 409
+    assert any(v["code"] == "student_teacher_mismatch"
+               for v in r.json()["detail"]["violations"])
+    assert client.post("/api/lessons", json=dict(
+        base, teacher_id="t2")).status_code == 200
+
+    client.delete("/api/teacher_students?teacher_id=t2&student_id=s1")
+    assert client.get("/api/teacher_students").json() == []
+
+
+def test_generate_respects_hard_pair(client):
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    for slot in ("mon-1", "mon-2", "tue-1"):
+        client.post("/api/teacher_availability",
+                    json={"teacher_id": "t2", "timeslot_id": slot})
+    client.post("/api/teacher_students", json={
+        "teacher_id": "t2", "student_id": "s1", "priority": 0})
+    client.post("/api/student_needs", json={
+        "student_id": "s1", "subject_id": "math", "sessions": 2})
+    assert client.post("/api/schedule/generate",
+                       json={}).json()["complete"] is True
+    body = client.get("/api/schedule").json()
+    assert body["violations"] == []
+    assert {l["teacher_id"] for l in body["lessons"]} == {"t2"}
 
 
 def test_room_teacher_limit_via_api(client):
