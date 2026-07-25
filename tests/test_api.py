@@ -721,6 +721,70 @@ def test_repeat_conflicts_use_caution_flow(client):
     assert r.json()["violations"]
 
 
+def test_bulk_update_changes_selected_lessons(client):
+    """Teacher/subject/room apply to all given lessons at once; locked
+    lessons are skipped and reported."""
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    for slot in ("mon-1", "mon-2", "tue-1"):
+        client.post("/api/teacher_availability",
+                    json={"teacher_id": "t2", "timeslot_id": slot})
+    ids = []
+    for st, slot in (("s1", "mon-1"), ("s2", "tue-1")):
+        r = client.post("/api/lessons", json={
+            "student_id": st, "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1", "timeslot_id": slot})
+        ids.append(r.json()["id"])
+    client.post(f"/api/lessons/{ids[1]}/lock", json={"locked": True})
+
+    r = client.post("/api/lessons/bulk_update",
+                    json={"lesson_ids": ids, "teacher_id": "t2"})
+    assert r.status_code == 200
+    assert r.json()["updated"] == 1
+    assert r.json()["skipped_locked"] == 1
+    teachers = {l["id"]: l["teacher_id"] for l in
+                client.get("/api/schedule").json()["lessons"]}
+    assert teachers[ids[0]] == "t2"
+    assert teachers[ids[1]] == "t1"        # locked one untouched
+
+
+def test_bulk_update_conflicts_use_caution_flow(client):
+    """An update that makes a lesson invalid (teacher can't teach the
+    new subject) is 409 unless forced."""
+    seed_world(client)
+    client.post("/api/subjects", json={"id": "eng", "name": "English"})
+    lid = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"}).json()["id"]
+    r = client.post("/api/lessons/bulk_update",
+                    json={"lesson_ids": [lid], "subject_id": "eng"})
+    assert r.status_code == 409
+    assert r.json()["detail"]["violations"]
+    r = client.post("/api/lessons/bulk_update",
+                    json={"lesson_ids": [lid], "subject_id": "eng",
+                          "force": True})
+    assert r.status_code == 200
+    assert r.json()["updated"] == 1
+    assert r.json()["violations"]
+
+
+def test_bulk_update_validates_input(client):
+    seed_world(client)
+    lid = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"}).json()["id"]
+    assert client.post("/api/lessons/bulk_update",
+                       json={"lesson_ids": [lid]}).status_code == 422
+    assert client.post("/api/lessons/bulk_update",
+                       json={"lesson_ids": [lid], "teacher_id": "ghost"}
+                       ).status_code == 422
+    assert client.post("/api/lessons/bulk_update",
+                       json={"lesson_ids": [999], "teacher_id": "t1"}
+                       ).status_code == 404
+
+
 def test_repeat_validates_input(client):
     seed_world(client)
     assert client.post("/api/lessons/repeat",
