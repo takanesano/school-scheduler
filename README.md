@@ -127,6 +127,44 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   output is always re-checked by the same validator). Requires the
   optional `ortools` dependency.
 
+## How assignment priorities work
+
+The Assignments tab pairs students with the teachers in charge of them.
+A pair's priority number picks one of two very different regimes:
+
+- **Priority 0 — a hard rule.** The student may **only** be taught by
+  their priority-0 teacher(s). The validator rejects any other teacher,
+  manual edits go through the usual confirm-to-override flow, and both
+  solvers never even consider anyone else.
+- **Priorities 1–9 — a soft preference**, scored in penalty points. A
+  student with at least one assignment (any priority) is a *paired*
+  student. Every lesson of theirs taught by a teacher **outside their
+  assigned set** costs `10 − (the strongest priority in their row)`
+  points — ignoring a priority-1 assignment costs 9 points per lesson,
+  a priority-9 one just 1 point. Lessons with any assigned teacher are
+  free. Nothing is forbidden; the schedule is simply "worse" by that
+  many points, and both solvers minimize the total as the draggable
+  **"Students taught by their assigned teacher"** condition — its
+  position in the rules list decides what it may be traded against,
+  and dragging it above the divider turns it into a hard cap
+  (bound 0 = every paired student stays with their assigned teachers,
+  or generation reports a violation).
+
+Blank cells have no meaning of their own — it depends on the row:
+
+- A student whose **whole row is blank** is neutral: no penalty ever,
+  any qualified teacher is equally fine.
+- Once a row has **any** assignment, every blank cell in it means
+  "not one of this student's teachers" — a lesson with that teacher
+  costs the points above. The assigned set is a whitelist for the
+  scoring: inside = free, outside = costs points. To make several
+  teachers acceptable, assign them all — their priorities may differ,
+  and the strongest one sets the price of going outside the set.
+
+Under the hood, the standard solver tries a student's assigned teachers
+first (strongest priority first) when placing each lesson; the exact
+solver prices the points directly in its objective.
+
 ## Using the web interface
 
 - **Calendars** tab — three printable month-style calendar views: an
@@ -182,14 +220,11 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   0 removes the need), with a per-student total column — plus which
   subjects each teacher can teach.
 - **Assignments** tab — who is in charge of whom: click a cell in the
-  student × teacher grid to cycle the pair's rigidity. **0** (red)
-  means the student **must** be taught by that teacher — a hard rule
-  both solvers obey and manual edits are checked against. **1-3**
-  (blue; up to 9 via API/CSV) is a soft preference: other teachers are
-  allowed but each such lesson costs points (stronger preference =
-  more points), minimized as the draggable "Students taught by their
-  assigned teacher" condition — which can itself be made always-active
-  like any other. Here too, **drag to select a block** and set every
+  student × teacher grid to open a picker for the pair's rigidity.
+  **0** (red) is a hard rule, **1-3** (blue; up to 9 via API/CSV) a
+  soft preference, blank = not assigned — the exact semantics are in
+  [How assignment priorities work](#how-assignment-priorities-work)
+  above. Here too, **drag to select a block** and set every
   cell to one value, clear them, or copy/paste the block — with the
   same ↩ Undo support.
 - **Availability** tab — click cells in the per-date grid to toggle
