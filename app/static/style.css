@@ -173,6 +173,13 @@ button.small {
 .grid-scroll tbody tr:hover td,
 .grid-scroll tbody tr:hover th {
   box-shadow: inset 0 0 0 999px rgba(47, 111, 237, 0.12); }
+/* drag-selected area (after the hover rules so it wins on ties) */
+.grid-scroll table { user-select: none; }
+.grid-scroll tbody tr td.area-sel {
+  box-shadow: inset 0 0 0 999px rgba(47, 111, 237, 0.28); }
+.area-bar button.pair-badge { border: 1px solid transparent;
+                              cursor: pointer; font: inherit;
+                              padding: 0.15rem 0.45rem; }
 td.pair-hard { background: #f6d5d3; color: #8f1d18; font-weight: 700; }
 td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
 .pair-badge { display: inline-block; min-width: 1.2rem; text-align: center;

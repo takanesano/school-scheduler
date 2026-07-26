@@ -220,6 +220,16 @@ weeks and marks non-term days `in_term: false`.
   `slotHook` wires dragover/drop per slot block; cards carry
   `data-lesson-id`, slot blocks `data-slot-id`. Headless-shell Chromium
   can't native-drag; UI smoke tests dispatch synthetic DragEvents.
+- Grid AREA SELECT (Availability + Assignments): `attachAreaSelect`
+  turns drag-across-cells into a rectangle selection (a >5px wiggle
+  inside ONE cell selects it — needed as a paste anchor; a clean click
+  still runs the cell's own action via a capture-phase click
+  suppressor). Per-panel `.area-bar` applies block actions through the
+  transactional bulk endpoints POST /api/{teacher,student}_availability
+  /bulk {add, remove} and /api/teacher_students/bulk {set, clear};
+  `state.gridClip` {kind: avail|pair, vals} is the copy/paste buffer
+  (kinds must match; avail clipboard pastes across the two
+  availability grids).
 - Frontend is a single no-build page (`app/static/app.js`). The
   spread/keep options persist in the JS `state` object; `GET /api/schedule`
   must be fetched with the same `one_subject_session_per_day` value the

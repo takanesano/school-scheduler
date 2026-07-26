@@ -595,6 +595,54 @@ def test_any_condition_can_be_always_active(client, term, value):
     assert client.get("/api/schedule").json()["violations"] == []
 
 
+def test_bulk_availability_set_and_clear(client):
+    """One transaction flips a whole rectangle of availability cells
+    (used by area select / paste in the Availability tab)."""
+    seed_world(client)
+    r = client.post("/api/student_availability/bulk", json={
+        "add": [], "remove": [["s1", "mon-1"], ["s1", "mon-2"],
+                              ["s2", "mon-1"]]})
+    assert r.status_code == 200 and r.json()["removed"] == 3
+    left = {(a["student_id"], a["timeslot_id"])
+            for a in client.get("/api/student_availability").json()}
+    assert ("s1", "mon-1") not in left and ("s2", "tue-1") in left
+    # add is idempotent (INSERT OR REPLACE)
+    r = client.post("/api/student_availability/bulk", json={
+        "add": [["s1", "mon-1"], ["s1", "mon-1"], ["s2", "mon-1"]],
+        "remove": []})
+    assert r.status_code == 200
+    left = {(a["student_id"], a["timeslot_id"])
+            for a in client.get("/api/student_availability").json()}
+    assert ("s1", "mon-1") in left and ("s2", "mon-1") in left
+    # unknown references and malformed pairs are 422, nothing changes
+    assert client.post("/api/teacher_availability/bulk", json={
+        "add": [["ghost", "mon-1"]], "remove": []}).status_code == 422
+    assert client.post("/api/teacher_availability/bulk", json={
+        "add": [["t1"]], "remove": []}).status_code == 422
+
+
+def test_bulk_teacher_students_set_and_clear(client):
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    r = client.post("/api/teacher_students/bulk", json={
+        "set": [["t1", "s1", 0], ["t2", "s1", 2], ["t2", "s2", 1]],
+        "clear": []})
+    assert r.status_code == 200 and r.json()["set"] == 3
+    pairs = {(p["teacher_id"], p["student_id"]): p["priority"]
+             for p in client.get("/api/teacher_students").json()}
+    assert pairs == {("t1", "s1"): 0, ("t2", "s1"): 2, ("t2", "s2"): 1}
+    r = client.post("/api/teacher_students/bulk", json={
+        "set": [["t2", "s1", 3]], "clear": [["t1", "s1"]]})
+    assert r.status_code == 200
+    pairs = {(p["teacher_id"], p["student_id"]): p["priority"]
+             for p in client.get("/api/teacher_students").json()}
+    assert pairs == {("t2", "s1"): 3, ("t2", "s2"): 1}
+    assert client.post("/api/teacher_students/bulk", json={
+        "set": [["t1", "s1", 10]], "clear": []}).status_code == 422
+    assert client.post("/api/teacher_students/bulk", json={
+        "set": [], "clear": [["t1"]]}).status_code == 422
+
+
 def test_teacher_students_crud_and_hard_pair_flow(client):
     """The Assignments tab's API: upsert with priority, listing, delete;
     a priority-0 pair blocks manual adds by other teachers through the

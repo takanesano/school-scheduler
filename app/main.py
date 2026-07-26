@@ -404,6 +404,74 @@ def del_student_avail(student_id: str, timeslot_id: str, conn=Depends(get_conn))
     return {"ok": True}
 
 
+# bulk grid edits (area select / paste in the Availability and
+# Assignments tabs): one transaction instead of one request per cell
+
+class AvailBulkIn(BaseModel):
+    add: list[list[str]] = Field(default_factory=list)     # [person, slot]
+    remove: list[list[str]] = Field(default_factory=list)
+
+
+def _bulk_avail(conn, table: str, idcol: str, body: AvailBulkIn):
+    if any(len(p) != 2 for p in body.add + body.remove):
+        raise HTTPException(422, "pairs must be [person_id, timeslot_id]")
+    try:
+        with conn:
+            conn.executemany(
+                f"INSERT OR REPLACE INTO {table} ({idcol}, timeslot_id) "  # noqa: S608
+                "VALUES (?, ?)", [tuple(p) for p in body.add])
+            conn.executemany(
+                f"DELETE FROM {table} WHERE {idcol}=? AND timeslot_id=?",  # noqa: S608
+                [tuple(p) for p in body.remove])
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(422, f"Unknown reference: {e}")
+    return {"ok": True, "added": len(body.add),
+            "removed": len(body.remove)}
+
+
+@app.post("/api/teacher_availability/bulk")
+def bulk_teacher_avail(body: AvailBulkIn, conn=Depends(get_conn)):
+    return _bulk_avail(conn, "teacher_availability", "teacher_id", body)
+
+
+@app.post("/api/student_availability/bulk")
+def bulk_student_avail(body: AvailBulkIn, conn=Depends(get_conn)):
+    return _bulk_avail(conn, "student_availability", "student_id", body)
+
+
+class PairBulkIn(BaseModel):
+    # [teacher_id, student_id, priority 0-9]
+    set: list[list] = Field(default_factory=list)
+    # [teacher_id, student_id]
+    clear: list[list[str]] = Field(default_factory=list)
+
+
+@app.post("/api/teacher_students/bulk")
+def bulk_teacher_students(body: PairBulkIn, conn=Depends(get_conn)):
+    for p in body.set:
+        if (len(p) != 3 or not isinstance(p[2], int)
+                or not 0 <= p[2] <= 9):
+            raise HTTPException(
+                422, "set entries must be [teacher_id, student_id, "
+                     "priority 0-9]")
+    if any(len(p) != 2 for p in body.clear):
+        raise HTTPException(
+            422, "clear entries must be [teacher_id, student_id]")
+    try:
+        with conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO teacher_students "
+                "(teacher_id, student_id, priority) VALUES (?, ?, ?)",
+                [tuple(p) for p in body.set])
+            conn.executemany(
+                "DELETE FROM teacher_students "
+                "WHERE teacher_id=? AND student_id=?",
+                [tuple(p) for p in body.clear])
+    except sqlite3.IntegrityError as e:
+        raise HTTPException(422, f"Unknown reference: {e}")
+    return {"ok": True, "set": len(body.set), "cleared": len(body.clear)}
+
+
 # ----------------------------------------------------------------- settings
 
 # "student_day_gap" capped at 0 by default = the consecutiveness rule is
