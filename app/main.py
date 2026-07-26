@@ -952,6 +952,97 @@ def repeat_lessons(body: RepeatIn,
             "violations": _violations_json(new_violations)}
 
 
+class ClipLessonIn(BaseModel):
+    student_id: str
+    subject_id: str
+    teacher_id: str
+    room_id: str
+    timeslot_id: str
+    locked: bool = False
+
+
+class PasteIn(BaseModel):
+    lessons: list[ClipLessonIn] = Field(min_length=1)
+    target_timeslot_id: str
+    force: bool = False
+
+
+@app.post("/api/lessons/paste")
+def paste_lessons(body: PasteIn,
+                  conn: sqlite3.Connection = Depends(get_conn)):
+    """Paste a copied block of lessons onto a target timeslot: the
+    earliest copied lesson (by date, then period) lands on the target,
+    every other one keeps its day/period offset. Slots that don't
+    exist at the shifted position and exact duplicates are skipped;
+    conflicts use the usual 409-unless-force flow. Lock status is
+    copied along."""
+    data = load_dataset(conn)
+    target = data.timeslots.get(body.target_timeslot_id)
+    if target is None:
+        raise HTTPException(
+            404, f"No such timeslot '{body.target_timeslot_id}'")
+    for pl in body.lessons:
+        for key, pool in [("student_id", data.students),
+                          ("subject_id", data.subjects),
+                          ("teacher_id", data.teachers),
+                          ("room_id", data.rooms),
+                          ("timeslot_id", data.timeslots)]:
+            if getattr(pl, key) not in pool:
+                raise HTTPException(
+                    422, f"Clipboard references unknown {key} "
+                         f"'{getattr(pl, key)}' — copy again")
+
+    slot_at = {(s.date, s.period): s.id for s in data.timeslots.values()}
+
+    def dp(pl):
+        s = data.timeslots[pl.timeslot_id]
+        return (datetime.date.fromisoformat(s.date), s.period)
+
+    a_date, a_period = min(dp(pl) for pl in body.lessons)
+    ddays = datetime.date.fromisoformat(target.date) - a_date
+    dper = target.period - a_period
+
+    lessons = load_lessons(conn)
+    seen = {(l.student_id, l.subject_id, l.teacher_id, l.room_id,
+             l.timeslot_id) for l in lessons}
+    new: list[Lesson] = []
+    skipped_no_slot = 0
+    skipped_duplicate = 0
+    for pl in body.lessons:
+        d, per = dp(pl)
+        sid = slot_at.get(((d + ddays).isoformat(), per + dper))
+        if sid is None:
+            skipped_no_slot += 1
+            continue
+        key = (pl.student_id, pl.subject_id, pl.teacher_id,
+               pl.room_id, sid)
+        if key in seen:
+            skipped_duplicate += 1
+            continue
+        seen.add(key)
+        new.append(Lesson(*key, locked=pl.locked))
+
+    new_violations = []
+    if new:
+        new_violations = [
+            v for v in _validate_with_settings(conn, data, lessons + new)
+            if None in v.lesson_ids]
+        if new_violations and not body.force:
+            raise HTTPException(409, detail={
+                "violations": _violations_json(new_violations)})
+        _push_undo(conn, "paste lessons")
+        with conn:
+            conn.executemany(
+                "INSERT INTO lessons (student_id, subject_id, teacher_id, "
+                "room_id, timeslot_id, locked) VALUES (?, ?, ?, ?, ?, ?)",
+                [(l.student_id, l.subject_id, l.teacher_id, l.room_id,
+                  l.timeslot_id, int(l.locked)) for l in new])
+    return {"ok": True, "created": len(new),
+            "skipped_no_slot": skipped_no_slot,
+            "skipped_duplicate": skipped_duplicate,
+            "violations": _violations_json(new_violations)}
+
+
 class BulkUpdateIn(BaseModel):
     lesson_ids: list[int] = Field(min_length=1)
     # only the provided fields change; omitted ones are kept per lesson
