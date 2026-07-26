@@ -18,6 +18,7 @@ const state = { tab: "schedule", keep: false, caution: true,
                 repeatWeeks: 4, gridClip: null,
                 addSel: null, reopenSlotAdd: null,
                 lessonClip: null, pasteArmed: false,
+                gridScroll: {}, gridSel: null,
                 objOrder: Object.keys(OBJ_LABELS),
                 hiddenTeachers: new Set(), hiddenStudents: new Set(),
                 filterSort: "name",
@@ -120,9 +121,8 @@ function attachAreaSelect(table, onSel) {
              c1: Math.min(anchor.c, last.c),
              c2: Math.max(anchor.c, last.c) };
   };
-  const paint = () => {
+  const paintRect = (rc) => {
     clear();
-    const rc = rect();
     const rows = table.tBodies[0].rows;
     for (let r = rc.r1; r <= rc.r2; r++) {
       for (let c = rc.c1; c <= rc.c2; c++) {
@@ -132,6 +132,7 @@ function attachAreaSelect(table, onSel) {
     }
     return rc;
   };
+  const paint = () => paintRect(rect());
   const track = (t) => {   // update `last` from an event target
     if (mode === "cells") {
       const p = cellPos(t);
@@ -230,15 +231,39 @@ function attachAreaSelect(table, onSel) {
       suppress = false;
     }
   }, true);
-  return { clear };
+  return { clear, setRect: paintRect };
 }
 
 let _gridSeq = 0;
-function enhanceGrid(wrap) {
+function enhanceGrid(wrap, key) {
   const table = $("table", wrap);
   if (!table) return;
   wrap.classList.add("grid-scroll");
   const id = table.id || (table.id = `grid-${++_gridSeq}`);
+  // keep the scroll position across re-renders (action buttons cause
+  // a full render; losing the place mid-edit is disorienting)
+  if (key) {
+    const saved = state.gridScroll[key];
+    if (saved) {
+      // the panel may not be in the document yet (renderers await
+      // between building and appending) — retry until it is, since
+      // scrolling a detached element is a no-op
+      let tries = 0;
+      const restore = () => {
+        if (!wrap.isConnected && tries++ < 30) {
+          requestAnimationFrame(restore);
+          return;
+        }
+        wrap.scrollTop = saved.top;
+        wrap.scrollLeft = saved.left;
+      };
+      requestAnimationFrame(restore);
+    }
+    wrap.addEventListener("scroll", () => {
+      state.gridScroll[key] = { top: wrap.scrollTop,
+                                left: wrap.scrollLeft };
+    });
+  }
   // two-row headers: the second row sticks below the first one
   requestAnimationFrame(() => {
     const rows = table.tHead ? table.tHead.rows : [];
@@ -483,7 +508,7 @@ async function renderTeachers(root) {
       }
       gbody.append(tr);
     }
-    enhanceGrid($(".grid-scroll", grid));
+    enhanceGrid($(".grid-scroll", grid), "teacher-subjects");
     root.append(grid);
   } else if (teachers.length) {
     root.append(el(`<div class="panel"><p class="muted">
@@ -694,7 +719,7 @@ async function renderNeeds(root) {
     updateTotal();
     tbody.append(tr);
   }
-  enhanceGrid($(".grid-scroll", needsPanel));
+  enhanceGrid($(".grid-scroll", needsPanel), "needs");
   root.append(needsPanel);
 
   const tsPanel = el(`<div class="panel"><h2>Teacher subjects (who can teach what)</h2>
@@ -743,9 +768,6 @@ async function renderAvailability(root) {
       Define timeslots first (Timeslots tab).</p></div>`));
     return;
   }
-  const undoRow = el(`<div class="row"></div>`);
-  undoRow.append(await gridUndoButton());
-  root.append(undoRow);
   await renderAvailGrid(root, "Teacher availability", teachers,
     "teacher_availability", "teacher_id", sorted);
   await renderAvailGrid(root, "Student availability", students,
@@ -762,7 +784,8 @@ async function renderAvailGrid(root, title, people, entity, idCol, slots) {
     if (last && last.date === s.date) last.slots.push(s);
     else dates.push({ date: s.date, slots: [s] });
   }
-  const panel = el(`<div class="panel"><h2>${title}</h2>
+  const panel = el(`<div class="panel">
+    <div class="tt-head"><h2>${title}</h2></div>
     <p class="muted">Click a cell to toggle. ✓ = available.</p>
     <div class="grid-scroll"><table class="grid-table"><thead>
       <tr><th></th>${dates.map(d =>
@@ -795,7 +818,8 @@ async function renderAvailGrid(root, title, people, entity, idCol, slots) {
     }
     tbody.append(tr);
   }
-  enhanceGrid($(".grid-scroll", panel));
+  enhanceGrid($(".grid-scroll", panel), entity);
+  $(".tt-head", panel).append(await gridUndoButton());
 
   // drag-select a rectangle -> bulk actions on the whole block
   const bar = el(`<div class="row area-bar" hidden>
@@ -809,14 +833,24 @@ async function renderAvailGrid(root, title, people, entity, idCol, slots) {
   </div>`);
   panel.insertBefore(bar, $(".grid-scroll", panel));
   let rect = null;
-  const selApi = attachAreaSelect($("table", panel), (r) => {
+  const showBar = (r) => {
     rect = r;
     bar.hidden = false;
     const n = (r.r2 - r.r1 + 1) * (r.c2 - r.c1 + 1);
     $(".area-count", bar).textContent = `${n} cells`;
     $('[data-act="paste"]', bar).disabled =
       !(state.gridClip && state.gridClip.kind === "avail");
+  };
+  const selApi = attachAreaSelect($("table", panel), (r) => {
+    state.gridSel = { key: entity, rect: r };
+    showBar(r);
   });
+  // restore the selection after an action button's re-render, so
+  // block edits can be chained without re-selecting
+  if (state.gridSel && state.gridSel.key === entity) {
+    selApi.setRect(state.gridSel.rect);
+    showBar(state.gridSel.rect);
+  }
   bar.onclick = async (e) => {
     const b = e.target.closest("button");
     if (!b || !rect) return;
@@ -824,6 +858,7 @@ async function renderAvailGrid(root, title, people, entity, idCol, slots) {
     if (act === "unsel") {
       selApi.clear();
       rect = null;
+      state.gridSel = null;
       bar.hidden = true;
       return;
     }
@@ -2454,7 +2489,7 @@ async function renderAssignments(root) {
       Add students and teachers first.</p></div>`));
     return;
   }
-  enhanceGrid($(".grid-scroll", panel));
+  enhanceGrid($(".grid-scroll", panel), "assignments");
   $(".tt-head", panel).append(await gridUndoButton());
 
   // drag-select a rectangle -> assign/clear/copy/paste the whole block
@@ -2472,20 +2507,29 @@ async function renderAssignments(root) {
   </div>`);
   panel.insertBefore(bar, $(".grid-scroll", panel));
   let rect = null;
-  const selApi = attachAreaSelect($("table", panel), (r) => {
+  const showBar = (r) => {
     rect = r;
     bar.hidden = false;
     const n = (r.r2 - r.r1 + 1) * (r.c2 - r.c1 + 1);
     $(".area-count", bar).textContent = `${n} cells`;
     $('[data-act="paste"]', bar).disabled =
       !(state.gridClip && state.gridClip.kind === "pair");
+  };
+  const selApi = attachAreaSelect($("table", panel), (r) => {
+    state.gridSel = { key: "assignments", rect: r };
+    showBar(r);
   });
+  if (state.gridSel && state.gridSel.key === "assignments") {
+    selApi.setRect(state.gridSel.rect);
+    showBar(state.gridSel.rect);
+  }
   bar.onclick = async (e) => {
     const b = e.target.closest("button");
     if (!b || !rect) return;
     if (b.dataset.act === "unsel") {
       selApi.clear();
       rect = null;
+      state.gridSel = null;
       bar.hidden = true;
       return;
     }
