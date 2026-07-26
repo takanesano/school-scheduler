@@ -501,6 +501,52 @@ def test_solve_falls_back_to_search_when_greedy_traps():
     assert ("s1", "mon-2") in placed
 
 
+def _trap_data():
+    """The greedy-trap instance from the test above: the search is
+    required, so an expired deadline forces the failsafe path."""
+    d = Dataset()
+    d.students = {"s1": "A", "s2": "B"}
+    d.teachers = {"t1": "T"}
+    d.subjects = {"math": "Math"}
+    d.rooms = {"r1": Room("r1", "R", 1)}
+    d.timeslots = {"mon-1": Timeslot("mon-1", "2026-07-27", 1),
+                   "mon-2": Timeslot("mon-2", "2026-07-27", 2)}
+    d.teacher_subjects = {("t1", "math")}
+    d.teacher_availability = {("t1", "mon-1"), ("t1", "mon-2")}
+    d.student_availability = {("s1", "mon-1"), ("s1", "mon-2"),
+                              ("s2", "mon-1")}
+    d.student_needs = {("s1", "math"): 1, ("s2", "math"): 1}
+    return d
+
+
+def test_solve_time_limit_falls_back_to_greedy_partial():
+    """A pre-expired deadline cuts the search off immediately: the
+    result is the deterministic greedy best-effort, flagged timed_out,
+    and still passes the validator."""
+    d = _trap_data()
+    r = solve(d, time_limit=-1.0)
+    assert r.timed_out
+    assert not r.complete
+    assert r.unscheduled == [("s2", "math", 1)]
+    assert validate(d, r.lessons) == []
+    placed = {(l.student_id, l.timeslot_id) for l in r.lessons}
+    assert ("s1", "mon-1") in placed       # greedy's (suboptimal) pick
+
+
+def test_solve_time_limit_never_cuts_greedy_fast_path():
+    """The greedy pass is exempt from the deadline — even an expired
+    time limit still yields the full greedy solution on instances the
+    fast path can finish (the exact solver's warm-up guarantee)."""
+    d = make_data()
+    d.student_needs = {("s1", "math"): 2, ("s1", "eng"): 1,
+                       ("s2", "math"): 1, ("s2", "eng"): 2}
+    r = solve(d, time_limit=-1.0)
+    assert r.complete
+    assert not r.timed_out
+    assert r.nodes_explored == 0
+    assert_solution_valid(d, r)
+
+
 def test_solve_prefers_one_lesson_per_day():
     """Two sessions, two days available: the solver uses both days rather
     than stacking a two-lesson day."""
@@ -745,6 +791,20 @@ def test_optimize_packs_teacher_into_fewer_days():
     assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0)
     assert sorted((l.student_id, l.subject_id) for l in out) == \
         [("s1", "math"), ("s2", "eng")]              # coverage untouched
+
+
+def test_optimize_time_limit_expired_keeps_input():
+    """With an already-expired deadline the optimizer bails before its
+    first round and hands back the schedule untouched (still valid)."""
+    d = make_data()
+    d.teachers = {"t1": "Tanaka"}
+    d.teacher_subjects = {("t1", "math"), ("t1", "eng")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1"),
+               Lesson("s2", "eng", "t1", "r1", "tue-1")]
+    out = optimize_teacher_days(d, lessons, time_limit=-1.0)
+    assert sorted((l.student_id, l.timeslot_id) for l in out) == \
+        [("s1", "mon-1"), ("s2", "tue-1")]     # the tue-1 move was skipped
 
 
 def test_optimize_balances_days_across_teachers():

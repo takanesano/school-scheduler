@@ -1403,7 +1403,10 @@ async function renderSchedule(root) {
         return;
       }
       state.lastGen = res;
-      if (res.complete) {
+      if (res.timed_out) {
+        toast("The standard solver hit its failsafe time limit — "
+          + "showing its best attempt (may be partial)", true);
+      } else if (res.complete) {
         toast(`Complete schedule: ${res.scheduled} lessons`
           + (state.exact ? ` (${res.backend})` : ""));
       } else toast("Partial schedule — see unscheduled list", true);
