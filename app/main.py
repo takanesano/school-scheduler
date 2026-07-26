@@ -282,6 +282,71 @@ def bulk_add_timeslots(body: BulkTimeslotsIn,
     return {"ok": True, "created": len(rows), "skipped": skipped}
 
 
+class BulkTimeslotEditIn(BaseModel):
+    # blank/absent dates = no bound, so "all period-5 slots" or "every
+    # Saturday period 1" needs no date range at all
+    start_date: str | None = None
+    end_date: str | None = None
+    weekdays: list[str]              # e.g. ["Mon", "Wed", "Sat"]
+    periods: list[int] = []          # empty = every period
+    # only the provided fields change on the matched slots
+    penalty: int | None = Field(default=None, ge=0, le=99)
+    label: str | None = None
+
+
+@app.post("/api/timeslots/bulk_edit")
+def bulk_edit_timeslots(body: BulkTimeslotEditIn,
+                        conn: sqlite3.Connection = Depends(get_conn)):
+    """Mass-edit EXISTING timeslots: every slot in the (optional) date
+    range whose weekday and period match gets the provided penalty
+    and/or label. Omitted fields are left as they are; nothing is
+    created or deleted.
+    """
+    import datetime as dt
+    for name, value in (("start_date", body.start_date),
+                        ("end_date", body.end_date)):
+        if value is not None and not csv_io._is_iso_date(value):
+            raise HTTPException(422, f"{name} must be YYYY-MM-DD")
+    start = (dt.date.fromisoformat(body.start_date)
+             if body.start_date else dt.date.min)
+    end = (dt.date.fromisoformat(body.end_date)
+           if body.end_date else dt.date.max)
+    if start > end:
+        raise HTTPException(422, "start_date must not be after end_date")
+    bad_days = [d for d in body.weekdays if d not in views.WEEKDAYS]
+    if bad_days:
+        raise HTTPException(422, f"Unknown weekday(s): {', '.join(bad_days)}")
+    if not body.weekdays:
+        raise HTTPException(422, "Select at least one weekday")
+    if body.penalty is None and body.label is None:
+        raise HTTPException(422, "Provide a penalty and/or a label to set")
+
+    wanted = set(body.periods)
+    ids = []
+    for r in conn.execute("SELECT id, date, period FROM timeslots"):
+        day = dt.date.fromisoformat(r["date"])
+        if not (start <= day <= end):
+            continue
+        if views.WEEKDAYS[day.weekday()] not in body.weekdays:
+            continue
+        if wanted and r["period"] not in wanted:
+            continue
+        ids.append(r["id"])
+    sets, params = [], []
+    if body.penalty is not None:
+        sets.append("penalty = ?")
+        params.append(body.penalty)
+    if body.label is not None:
+        sets.append("label = ?")
+        params.append(body.label)
+    with conn:
+        for sid in ids:
+            conn.execute(
+                f"UPDATE timeslots SET {', '.join(sets)} WHERE id = ?",  # noqa: S608
+                (*params, sid))
+    return {"ok": True, "updated": len(ids)}
+
+
 @app.delete("/api/timeslots/{item_id}")
 def delete_timeslot(item_id: str, conn: sqlite3.Connection = Depends(get_conn)):
     with conn:
