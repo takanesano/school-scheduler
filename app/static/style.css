@@ -153,20 +153,41 @@ body.banding { user-select: none; }
            margin-bottom: 0.8rem; }
 .tt-head h2 { margin: 0; }
 .tt-undo { margin-left: auto; }
-/* assignments grid: 0 = hard pair (red), 1-9 = soft preference (blue) */
-.pair-cell { cursor: pointer; text-align: center; color: var(--muted);
-             position: relative; }
-.pair-pop { position: absolute; top: 100%; left: 50%;
-            transform: translateX(-50%); z-index: 15;
-            display: flex; gap: 0.25rem; padding: 0.3rem 0.4rem;
-            background: var(--panel); border: 1px solid var(--border);
-            border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
-.pair-pop button { border: 1px solid transparent; cursor: pointer;
-                   font: inherit; }
-.pair-pop button.active { outline: 2px solid var(--accent); }
-.pair-pop button[disabled] { opacity: 0.35; cursor: default; }
-.pair-badge.pair-clear { background: var(--bg); color: var(--muted); }
-.pair-pop.up { top: auto; bottom: 100%; }
+/* assignments grid: student × subject, cells hold assigned teachers */
+.assign-cell { cursor: pointer; text-align: center; color: var(--muted);
+               position: relative; font-size: 0.82rem;
+               min-width: 6.5rem; }
+td.assign-hard { background: #f6d5d3; color: #8f1d18; font-weight: 600; }
+/* NOT opacity: that would create a stacking context and trap the
+   popover underneath later rows */
+td.assign-unneeded { color: rgba(128, 128, 128, 0.45);
+                     background: rgba(128, 128, 128, 0.07); }
+.assign-pop { position: absolute; top: 100%; left: 50%;
+              transform: translateX(-50%); z-index: 15;
+              display: flex; flex-direction: column; gap: 0.2rem;
+              padding: 0.35rem 0.4rem; min-width: 11rem;
+              background: var(--panel); border: 1px solid var(--border);
+              border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+              text-align: left; color: var(--fg); }
+.assign-pop.up { top: auto; bottom: 100%; }
+.assign-row { display: flex; gap: 0.3rem; align-items: center; }
+.assign-toggle { flex: 1; text-align: left; border: 1px solid transparent;
+                 background: var(--bg); cursor: pointer; font: inherit;
+                 border-radius: 4px; padding: 0.15rem 0.4rem; }
+.assign-toggle.on { background: #f6d5d3; color: #8f1d18;
+                    font-weight: 600; }
+.assign-all { border: 1px solid var(--border); background: var(--bg);
+              color: var(--muted); cursor: pointer; font-size: 0.72rem;
+              border-radius: 4px; padding: 0.15rem 0.3rem;
+              white-space: nowrap; }
+.assign-clear { border: 1px solid var(--border); background: var(--bg);
+                color: var(--muted); cursor: pointer; font: inherit;
+                border-radius: 4px; padding: 0.15rem 0.4rem;
+                margin-top: 0.15rem; }
+@media (prefers-color-scheme: dark) {
+  td.assign-hard, .assign-toggle.on { background: #4a2320;
+                                      color: #f2a9a3; }
+}
 
 /* scrollable people × slots grids with sticky headers: the header
    row(s) stay visible while scrolling down, the name column while
@@ -196,25 +217,11 @@ body.banding { user-select: none; }
 .grid-scroll thead th:not(:first-child) { cursor: pointer; }
 .grid-scroll tbody tr td.area-sel {
   box-shadow: inset 0 0 0 999px rgba(47, 111, 237, 0.28); }
-.area-bar button.pair-badge { border: 1px solid transparent;
-                              cursor: pointer; font: inherit;
-                              padding: 0.15rem 0.45rem; }
 /* student-needs matrix */
 .grid-scroll input { user-select: text; }
 .need-cell { text-align: center; }
 .need-total { text-align: center; font-weight: 600;
               color: var(--muted); }
-td.pair-hard { background: #f6d5d3; color: #8f1d18; font-weight: 700; }
-td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
-.pair-badge { display: inline-block; min-width: 1.2rem; text-align: center;
-              border-radius: 3px; font-size: 0.78rem; font-weight: 700;
-              padding: 0 0.15rem; }
-.pair-badge.pair-hard { background: #f6d5d3; color: #8f1d18; }
-.pair-badge.pair-soft { background: #d7e3fb; color: #1d3f8f; }
-@media (prefers-color-scheme: dark) {
-  td.pair-hard, .pair-badge.pair-hard { background: #4a2320; color: #f2a9a3; }
-  td.pair-soft, .pair-badge.pair-soft { background: #223558; color: #a8c2f5; }
-}
 .lesson-card.editing { cursor: default; padding-right: 0.4rem; }
 .lesson-edit select { width: 100%; margin: 0.12rem 0; font-size: 0.78rem;
                       padding: 0.15rem 0.3rem; }

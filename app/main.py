@@ -389,44 +389,41 @@ def _insert_link(conn, table: str, cols: list[str], values: tuple):
         raise HTTPException(422, f"Unknown reference: {e}")
 
 
-class TeacherStudentIn(BaseModel):
-    teacher_id: str
+class AssignmentIn(BaseModel):
+    """One (student, subject, teacher) assignment — a hard rule."""
     student_id: str
-    # 0 = the student MUST be taught by this teacher; 1-9 = soft
-    priority: int = Field(default=1, ge=0, le=9)
+    subject_id: str
+    teacher_id: str
 
 
-@app.post("/api/teacher_students")
-def add_teacher_student(item: TeacherStudentIn, conn=Depends(get_conn)):
+@app.post("/api/student_subject_teachers")
+def add_assignment(item: AssignmentIn, conn=Depends(get_conn)):
+    key = (item.student_id, item.subject_id, item.teacher_id)
     prior = conn.execute(
-        "SELECT priority FROM teacher_students WHERE teacher_id=? "
-        "AND student_id=?", (item.teacher_id, item.student_id)).fetchone()
-    _insert_link(conn, "teacher_students",
-                 ["teacher_id", "student_id", "priority"],
-                 (item.teacher_id, item.student_id, item.priority))
-    if prior is None or prior["priority"] != item.priority:
-        inv = ({"set": [[item.teacher_id, item.student_id,
-                         prior["priority"]]], "clear": []}
-               if prior is not None else
-               {"set": [], "clear": [[item.teacher_id, item.student_id]]})
-        _push_undo(conn, "assignment change", {"pairs": inv})
+        "SELECT 1 FROM student_subject_teachers WHERE student_id=? "
+        "AND subject_id=? AND teacher_id=?", key).fetchone()
+    _insert_link(conn, "student_subject_teachers",
+                 ["student_id", "subject_id", "teacher_id"], key)
+    if prior is None:
+        _push_undo(conn, "assignment change",
+                   {"assign": {"add": [], "remove": [list(key)]}})
     return {"ok": True}
 
 
-@app.delete("/api/teacher_students")
-def del_teacher_student(teacher_id: str, student_id: str,
-                        conn=Depends(get_conn)):
+@app.delete("/api/student_subject_teachers")
+def del_assignment(student_id: str, subject_id: str, teacher_id: str,
+                   conn=Depends(get_conn)):
+    key = (student_id, subject_id, teacher_id)
     prior = conn.execute(
-        "SELECT priority FROM teacher_students WHERE teacher_id=? "
-        "AND student_id=?", (teacher_id, student_id)).fetchone()
+        "SELECT 1 FROM student_subject_teachers WHERE student_id=? "
+        "AND subject_id=? AND teacher_id=?", key).fetchone()
     with conn:
         conn.execute(
-            "DELETE FROM teacher_students WHERE teacher_id=? AND student_id=?",
-            (teacher_id, student_id))
+            "DELETE FROM student_subject_teachers WHERE student_id=? "
+            "AND subject_id=? AND teacher_id=?", key)
     if prior is not None:
-        _push_undo(conn, "assignment change", {"pairs": {
-            "set": [[teacher_id, student_id, prior["priority"]]],
-            "clear": []}})
+        _push_undo(conn, "assignment change",
+                   {"assign": {"add": [list(key)], "remove": []}})
     return {"ok": True}
 
 
@@ -557,55 +554,44 @@ def bulk_student_avail(body: AvailBulkIn, conn=Depends(get_conn)):
     return _bulk_avail(conn, "student_availability", "student_id", body)
 
 
-class PairBulkIn(BaseModel):
-    # [teacher_id, student_id, priority 0-9]
-    set: list[list] = Field(default_factory=list)
-    # [teacher_id, student_id]
-    clear: list[list[str]] = Field(default_factory=list)
+class AssignBulkIn(BaseModel):
+    # [student_id, subject_id, teacher_id] triples
+    add: list[list[str]] = Field(default_factory=list)
+    remove: list[list[str]] = Field(default_factory=list)
 
 
-@app.post("/api/teacher_students/bulk")
-def bulk_teacher_students(body: PairBulkIn, conn=Depends(get_conn)):
-    for p in body.set:
-        if (len(p) != 3 or not isinstance(p[2], int)
-                or not 0 <= p[2] <= 9):
-            raise HTTPException(
-                422, "set entries must be [teacher_id, student_id, "
-                     "priority 0-9]")
-    if any(len(p) != 2 for p in body.clear):
+@app.post("/api/student_subject_teachers/bulk")
+def bulk_assignments(body: AssignBulkIn, conn=Depends(get_conn)):
+    if any(len(p) != 3 for p in body.add + body.remove):
         raise HTTPException(
-            422, "clear entries must be [teacher_id, student_id]")
-    prior = {(r["teacher_id"], r["student_id"]): r["priority"]
+            422, "entries must be [student_id, subject_id, teacher_id]")
+    prior = {(r["student_id"], r["subject_id"], r["teacher_id"])
              for r in conn.execute(
-                 "SELECT teacher_id, student_id, priority "
-                 "FROM teacher_students")}
-    inverse = {"set": [], "clear": []}
-    for p in body.set:
-        key = (p[0], p[1])
-        if key in prior:
-            if prior[key] != p[2]:
-                inverse["set"].append([p[0], p[1], prior[key]])
-        else:
-            inverse["clear"].append([p[0], p[1]])
-    for p in body.clear:
-        key = (p[0], p[1])
-        if key in prior:
-            inverse["set"].append([p[0], p[1], prior[key]])
+                 "SELECT student_id, subject_id, teacher_id "
+                 "FROM student_subject_teachers")}
+    inverse = {"add": [], "remove": []}
+    for p in body.add:
+        if tuple(p) not in prior:
+            inverse["remove"].append(list(p))
+    for p in body.remove:
+        if tuple(p) in prior:
+            inverse["add"].append(list(p))
     try:
         with conn:
             conn.executemany(
-                "INSERT OR REPLACE INTO teacher_students "
-                "(teacher_id, student_id, priority) VALUES (?, ?, ?)",
-                [tuple(p) for p in body.set])
+                "INSERT OR REPLACE INTO student_subject_teachers "
+                "(student_id, subject_id, teacher_id) VALUES (?, ?, ?)",
+                [tuple(p) for p in body.add])
             conn.executemany(
-                "DELETE FROM teacher_students "
-                "WHERE teacher_id=? AND student_id=?",
-                [tuple(p) for p in body.clear])
+                "DELETE FROM student_subject_teachers "
+                "WHERE student_id=? AND subject_id=? AND teacher_id=?",
+                [tuple(p) for p in body.remove])
     except sqlite3.IntegrityError as e:
         raise HTTPException(422, f"Unknown reference: {e}")
-    if inverse["set"] or inverse["clear"]:
-        _push_undo(conn, "assignment block edit", {"pairs": inverse})
-    return {"ok": True, "set": len(body.set), "cleared": len(body.clear)}
+    if inverse["add"] or inverse["remove"]:
+        _push_undo(conn, "assignment block edit", {"assign": inverse})
+    return {"ok": True, "added": len(body.add),
+            "removed": len(body.remove)}
 
 
 # ----------------------------------------------------------------- settings
@@ -748,9 +734,10 @@ def load_dataset(conn: sqlite3.Connection) -> Dataset:
     for r in conn.execute("SELECT teacher_id, subject_id FROM teacher_subjects"):
         data.teacher_subjects.add((r["teacher_id"], r["subject_id"]))
     for r in conn.execute(
-            "SELECT teacher_id, student_id, priority FROM teacher_students"):
-        data.teacher_students[(r["student_id"], r["teacher_id"])] = \
-            r["priority"]
+            "SELECT student_id, subject_id, teacher_id "
+            "FROM student_subject_teachers"):
+        data.subject_teachers.setdefault(
+            (r["student_id"], r["subject_id"]), set()).add(r["teacher_id"])
     for r in conn.execute(
             "SELECT student_id, subject_id, sessions FROM student_needs"):
         data.student_needs[(r["student_id"], r["subject_id"])] = r["sessions"]
@@ -833,7 +820,7 @@ def _push_undo(conn: sqlite3.Connection, label: str,
     """Record one undoable MANUAL edit. Without ``payload`` this
     snapshots the whole lessons table (restored verbatim, ids
     included); grid edits pass an INVERSE-delta payload instead:
-    {"avail": {table, add, remove}} or {"pairs": {set, clear}} — the
+    {"avail": {table, add, remove}} or {"assign": {add, remove}} — the
     exact bulk operation that reverts the change."""
     if payload is None:
         payload = [dict(r) for r in conn.execute(
@@ -986,7 +973,7 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     stats = teacher_day_stats(data, lessons)
     sstats = student_day_stats(data, lessons)
     s = get_settings(conn)
-    (double_days, gap_days, pair_miss, slot_spread, total_days,
+    (double_days, gap_days, slot_spread, total_days,
      single_days, day_spread, slot_penalty, subject_repeats,
      teacher_idle, subject_bunch) = schedule_objective(
         data, lessons, single_day_max=s["single_day_max"])
@@ -1005,7 +992,6 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
             for st in sorted(data.students, key=lambda st: data.students[st])],
         "objective": {"student_double_days": double_days,
                       "student_day_gaps": gap_days,
-                      "pair_miss": pair_miss,
                       "slot_spread": slot_spread, "total_days": total_days,
                       "teacher_single_days": single_days,
                       "day_spread": day_spread,
@@ -1482,16 +1468,16 @@ def undo_last_edit(conn: sqlite3.Connection = Depends(get_conn)):
                     f"DELETE FROM {d['table']} "  # noqa: S608
                     f"WHERE {idcol}=? AND timeslot_id=?",
                     [tuple(p) for p in d["remove"]])
-            elif "pairs" in snap:
-                d = snap["pairs"]
+            elif "assign" in snap:
+                d = snap["assign"]
                 conn.executemany(
-                    "INSERT OR REPLACE INTO teacher_students "
-                    "(teacher_id, student_id, priority) VALUES (?, ?, ?)",
-                    [tuple(p) for p in d["set"]])
+                    "INSERT OR REPLACE INTO student_subject_teachers "
+                    "(student_id, subject_id, teacher_id) VALUES (?, ?, ?)",
+                    [tuple(p) for p in d["add"]])
                 conn.executemany(
-                    "DELETE FROM teacher_students "
-                    "WHERE teacher_id=? AND student_id=?",
-                    [tuple(p) for p in d["clear"]])
+                    "DELETE FROM student_subject_teachers "
+                    "WHERE student_id=? AND subject_id=? AND teacher_id=?",
+                    [tuple(p) for p in d["remove"]])
             else:
                 raise sqlite3.IntegrityError("unknown snapshot format")
     except sqlite3.IntegrityError:

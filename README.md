@@ -62,8 +62,8 @@ A generated schedule always satisfies these hard constraints:
    are two they must be in **consecutive periods** (no gap in between).
 6. A teacher never exceeds their own **max lessons per day**, when one
    is set on the Teachers tab (0 = no limit).
-7. A student assigned to a teacher with **priority 0** on the
-   Assignments tab is taught by that teacher **only**.
+7. A (student, subject) with **assigned teachers** on the Assignments
+   tab is taught that subject by one of them **only**.
 
 After solving, an optimization pass (on by default, toggleable) improves
 the soft objectives without changing who learns what, in strict priority
@@ -137,43 +137,30 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   output is always re-checked by the same validator). Requires the
   optional `ortools` dependency.
 
-## How assignment priorities work
+## How assignments work
 
-The Assignments tab pairs students with the teachers in charge of them.
-A pair's priority number picks one of two very different regimes:
+The Assignments tab records **who teaches which subject to which
+student** — one rule per (student, subject, teacher). It is purely a
+**hard rule** (there are no priorities):
 
-- **Priority 0 — a hard rule.** The student may **only** be taught by
-  their priority-0 teacher(s). The validator rejects any other teacher,
-  manual edits go through the usual confirm-to-override flow, and both
-  solvers never even consider anyone else.
-- **Priorities 1–9 — a soft preference**, scored in penalty points. A
-  student with at least one assignment (any priority) is a *paired*
-  student. Every lesson of theirs taught by a teacher **outside their
-  assigned set** costs `10 − (the strongest priority in their row)`
-  points — ignoring a priority-1 assignment costs 9 points per lesson,
-  a priority-9 one just 1 point. Lessons with any assigned teacher are
-  free. Nothing is forbidden; the schedule is simply "worse" by that
-  many points, and both solvers minimize the total as the draggable
-  **"Students taught by their assigned teacher"** condition — its
-  position in the rules list decides what it may be traded against,
-  and dragging it above the divider turns it into a hard cap
-  (bound 0 = every paired student stays with their assigned teachers,
-  or generation reports a violation).
+- When a (student, subject) cell has one or more assigned teachers,
+  that student is taught that subject **only by them**. The validator
+  rejects any other teacher, manual edits go through the usual
+  confirm-to-override flow, and both solvers never even consider
+  anyone else for that subject.
+- An **empty cell is free**: any teacher who can teach the subject may
+  take it. Assignments on one subject say nothing about the student's
+  other subjects.
+- Assigning **several teachers to one cell** means "any of these" —
+  the solvers choose freely among them. Assigning **one teacher to
+  several subjects of the same student** is just several rules (the
+  popover's "all subj." button creates them in one click).
 
-Blank cells have no meaning of their own — it depends on the row:
-
-- A student whose **whole row is blank** is neutral: no penalty ever,
-  any qualified teacher is equally fine.
-- Once a row has **any** assignment, every blank cell in it means
-  "not one of this student's teachers" — a lesson with that teacher
-  costs the points above. The assigned set is a whitelist for the
-  scoring: inside = free, outside = costs points. To make several
-  teachers acceptable, assign them all — their priorities may differ,
-  and the strongest one sets the price of going outside the set.
-
-Under the hood, the standard solver tries a student's assigned teachers
-first (strongest priority first) when placing each lesson; the exact
-solver prices the points directly in its objective.
+Old databases and backups migrate automatically: each priority-0 pair
+from the previous per-student model becomes one assignment per subject
+that teacher can teach; the old soft priorities (1–9) had no hard
+meaning and are dropped, along with the "Students taught by their
+assigned teacher" condition card.
 
 ## Using the web interface
 
@@ -239,14 +226,17 @@ solver prices the points directly in its objective.
   the session count straight into a cell (saved immediately; blank or
   0 removes the need), with a per-student total column — plus which
   subjects each teacher can teach.
-- **Assignments** tab — who is in charge of whom: click a cell in the
-  student × teacher grid to open a picker for the pair's rigidity.
-  **0** (red) is a hard rule, **1-3** (blue; up to 9 via API/CSV) a
-  soft preference, blank = not assigned — the exact semantics are in
-  [How assignment priorities work](#how-assignment-priorities-work)
-  above. Here too, **drag to select a block** and set every
-  cell to one value, clear them, or copy/paste the block — with the
-  same ↩ Undo support.
+- **Assignments** tab — who teaches which subject to which student: a
+  **student × subject** grid where each cell lists the assigned
+  teacher(s) — red cells are hard rules, empty cells are free, greyed
+  cells are subjects the student has no sessions of (see
+  [How assignments work](#how-assignments-work) above). Click a cell
+  to open a picker of the teachers who can teach that subject: toggle
+  any of them (several allowed = "any of these"), use **all subj.** to
+  put one teacher in charge of every subject the student needs that
+  they can teach, or clear the cell. A **By teacher** summary below
+  shows each teacher's students with the subjects in parentheses.
+  ↩ Undo works here too.
 - **Availability** tab — click cells in the per-date grid to toggle
   teacher and student availability. **Drag across cells to select a
   rectangle** (the grid auto-scrolls when the cursor reaches its
@@ -285,7 +275,7 @@ student also removes their availability, needs, and lessons).
 | `rooms.csv` | `id,name,capacity,teacher_capacity` (teacher_capacity optional: max distinct teachers per timeslot, 0 = no limit) |
 | `timeslots.csv` | `id,date,period,label,penalty` (date: `YYYY-MM-DD`; label optional, e.g. `09:00-10:10`; penalty optional 0-99, points each lesson in the slot costs, 0 = none) |
 | `teacher_subjects.csv` | `teacher_id,subject_id` |
-| `teacher_students.csv` | `teacher_id,student_id,priority` (priority optional: 0 = must, 1-9 = soft preference, default 1) |
+| `student_subject_teachers.csv` | `student_id,subject_id,teacher_id` (one row per assignment; the student's subject is taught only by their assigned teacher(s)) |
 | `student_needs.csv` | `student_id,subject_id,sessions` (total over the term) |
 | `teacher_availability.csv` | `teacher_id,timeslot_id` |
 | `student_availability.csv` | `student_id,timeslot_id` |
