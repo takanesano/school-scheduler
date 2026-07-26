@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import sqlite3
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import (Depends, FastAPI, File, HTTPException, Response,
+                     UploadFile)
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1066,6 +1068,80 @@ def undo_last_edit(conn: sqlite3.Connection = Depends(get_conn)):
 @app.get("/api/schedule/check")
 def check_inputs(conn: sqlite3.Connection = Depends(get_conn)):
     return {"problems": check_input_problems(load_dataset(conn))}
+
+
+# ------------------------------------------------------------ backup/restore
+
+@app.get("/api/backup.db")
+def download_backup(conn: sqlite3.Connection = Depends(get_conn)):
+    """A consistent snapshot of the whole database (SQLite backup API,
+    safe while the app is in use), timestamped for easy versioning."""
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    try:
+        dest = sqlite3.connect(tmp)
+        try:
+            conn.backup(dest)
+        finally:
+            dest.close()
+        data = Path(tmp).read_bytes()
+    finally:
+        os.unlink(tmp)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    return Response(
+        content=data, media_type="application/x-sqlite3",
+        headers={"Content-Disposition":
+                 f'attachment; filename="school-backup-{stamp}.db"'})
+
+
+@app.post("/api/backup.db")
+async def restore_backup(file: UploadFile = File(...)):
+    """Replace the ENTIRE database with an uploaded backup. The file is
+    validated first (SQLite format, integrity, expected tables) and the
+    schema migrations re-run afterwards, so older backups restore
+    cleanly. All current data is lost — the UI double-confirms."""
+    raw = await file.read()
+    if not raw.startswith(b"SQLite format 3\x00"):
+        raise HTTPException(422, "Not an SQLite database file")
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".db")
+    with os.fdopen(fd, "wb") as f:
+        f.write(raw)
+    try:
+        check = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
+        try:
+            ok = check.execute("PRAGMA integrity_check").fetchone()[0]
+            tables = {r[0] for r in check.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            check.close()
+        required = {"students", "teachers", "subjects", "rooms",
+                    "timeslots", "lessons", "student_needs"}
+        if ok != "ok":
+            raise HTTPException(422, "The database file is corrupted")
+        if not required <= tables:
+            raise HTTPException(
+                422, "Not a scheduler database (missing tables: "
+                     + ", ".join(sorted(required - tables)) + ")")
+        path = Path(getattr(app.state, "db_path", db.DEFAULT_DB_PATH))
+        os.replace(tmp, path)
+        tmp = None                     # consumed by the replace
+        for side in (f"{path}-wal", f"{path}-shm"):
+            Path(side).unlink(missing_ok=True)
+    finally:
+        if tmp:
+            os.unlink(tmp)
+    db.init_db(path)                   # migrate older backups in place
+    conn = db.connect(path)
+    try:
+        _migrate_settings(conn)
+        counts = {t: conn.execute(
+            f"SELECT COUNT(*) AS n FROM {t}").fetchone()["n"]  # noqa: S608
+            for t in ("students", "teachers", "lessons")}
+    finally:
+        conn.close()
+    return {"ok": True, **counts}
 
 
 # ------------------------------------------------------------ calendar views
