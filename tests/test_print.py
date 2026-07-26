@@ -149,10 +149,16 @@ def test_batch_xlsx_one_sheet_per_person():
     assert ws.cell(row=3, column=3).value == "数学"        # s2 Wed P1
     assert ws.cell(row=4, column=3).value == "1限"
 
+    # teacher sheets are week matrices: period rows × day columns
     tv = [build_teacher_view(d, LESSONS, t) for t in ("t1", "t2")]
     wb = load_workbook(io.BytesIO(teachers_xlsx(tv, STAMP)))
     assert wb.sheetnames == ["田中 (t1)", "鈴木 (t2)"]
-    assert wb["田中 (t1)"].cell(row=2, column=2).value == "葵(数学)"
+    ws = wb["田中 (t1)"]
+    assert ws.cell(row=1, column=2).value == "7/27(月)"
+    assert ws.cell(row=2, column=1).value == "1限 09:00-10:10"
+    assert ws.cell(row=2, column=2).value == "葵"        # t1 Mon P1
+    assert ws.cell(row=2, column=4).value == "蓮"        # t1 Wed P1
+    assert ws.cell(row=3, column=1).value == "2限 10:20-11:30"
 
     import pytest as _pytest
     with _pytest.raises(ValueError):

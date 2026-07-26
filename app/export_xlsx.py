@@ -197,50 +197,6 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
     return buf.getvalue()
 
 
-def _person_sheet(ws, view: dict, generated_at: str, cell_text) -> None:
-    """One transposed personal timetable: day rows × single period
-    columns; ``cell_text(slot) -> str`` renders one slot's entries."""
-    days, periods, label_of = _days_periods_labels(view)
-    ws.cell(row=1, column=1, value="日付")
-    _header_cell(ws.cell(row=1, column=1))
-    for i, p in enumerate(periods):
-        head = _circled(p)
-        if label_of.get(p):
-            head += f" {label_of[p]}"
-        _header_cell(ws.cell(row=1, column=2 + i, value=head))
-    r = 2
-    for day in days:
-        d = dt.date.fromisoformat(day["date"])
-        wd = day["weekday"]
-        date_cell = ws.cell(row=r, column=1,
-                            value=f"{d.month}/{d.day}({WEEKDAY_JA[wd]})")
-        date_cell.alignment = Alignment(horizontal="center",
-                                        vertical="center")
-        if wd == "Sun":
-            date_cell.font = SUN
-        elif wd == "Sat":
-            date_cell.font = SAT
-        slots = {s["period"]: s for s in day["slots"]}
-        for i, p in enumerate(periods):
-            cell = ws.cell(row=r, column=2 + i)
-            slot = slots.get(p)
-            if slot is None:
-                cell.fill = GREY
-            elif slot["entries"]:
-                cell.value = cell_text(slot)
-        r += 1
-    for row in range(1, r):
-        for col in range(1, 2 + len(periods)):
-            ws.cell(row=row, column=col).border = Border(
-                left=MEDIUM, right=MEDIUM,
-                top=MEDIUM if row <= 2 else THIN,
-                bottom=MEDIUM if row in (1, r - 1) else THIN)
-    ws.column_dimensions["A"].width = 10
-    for i in range(len(periods)):
-        ws.column_dimensions[get_column_letter(2 + i)].width = 18
-    _page_setup(ws, view, generated_at)
-
-
 def _calendar_sheet(ws, view: dict, generated_at: str,
                     cell_rows) -> None:
     """One month-style calendar: Mon-Sun columns, THREE rows per week —
@@ -286,20 +242,6 @@ def _calendar_sheet(ws, view: dict, generated_at: str,
     ws.freeze_panes = "A2"                       # no sticky name column
 
 
-def _batch_xlsx(views: list[dict], generated_at: str,
-                title_of, cell_text) -> bytes:
-    if not views:
-        raise ValueError("nothing to export")
-    wb = Workbook()
-    wb.remove(wb.active)
-    for v in views:
-        ws = wb.create_sheet(title=title_of(v))
-        _person_sheet(ws, v, generated_at, cell_text)
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
-
 def _student_cell_rows(cell: dict) -> tuple[str, str]:
     """Subjects on top, their periods (1限 style) below — comma-
     delimited, aligned by lesson order (same as the student PDF)."""
@@ -328,12 +270,80 @@ def students_xlsx(views: list[dict], generated_at: str) -> bytes:
     return buf.getvalue()
 
 
+def _teacher_matrix_sheet(ws, view: dict, generated_at: str) -> None:
+    """One week-matrix timetable: per week a block of rows — a date
+    header (Mon-Sun columns) then one row per period (1限 style),
+    each cell listing the teacher's students in that slot."""
+    periods = view["periods"]
+    label_of: dict[int, str] = {}
+    for w in view["weeks"]:
+        for c in w:
+            for s in c["slots"]:
+                if s["label"] and s["period"] not in label_of:
+                    label_of[s["period"]] = s["label"]
+    r = 1
+    for week in view["weeks"]:
+        head_row, first_period_row = r, r + 1
+        _header_cell(ws.cell(row=r, column=1, value=""))
+        for i, cell in enumerate(week):
+            d = dt.date.fromisoformat(cell["date"])
+            wd = cell["weekday"]
+            hc = ws.cell(row=r, column=2 + i,
+                         value=f"{d.month}/{d.day}({WEEKDAY_JA[wd]})")
+            _header_cell(hc)
+            if wd == "Sun":
+                hc.font = SUN
+            elif wd == "Sat":
+                hc.font = SAT
+        r += 1
+        for p in periods:
+            label = f"{p}限"
+            if label_of.get(p):
+                label += f" {label_of[p]}"
+            lc = ws.cell(row=r, column=1, value=label)
+            lc.alignment = Alignment(horizontal="center",
+                                     vertical="center")
+            for i, cell in enumerate(week):
+                c = ws.cell(row=r, column=2 + i)
+                has_slot = any(s["period"] == p for s in cell["slots"])
+                if not cell["in_term"] or not has_slot:
+                    c.fill = GREY
+                    continue
+                names = "、".join(
+                    e["student_name"]
+                    for s in cell["slots"] if s["period"] == p
+                    for e in s["entries"])
+                if names:
+                    c.value = names
+            r += 1
+        # borders: medium frame around the week block, thin inside
+        for row in range(head_row, r):
+            for col in range(1, 9):
+                ws.cell(row=row, column=col).border = Border(
+                    left=MEDIUM if col in (1, 2) else THIN,
+                    right=MEDIUM if col == 8 else THIN,
+                    top=MEDIUM if row in (head_row, first_period_row)
+                    else THIN,
+                    bottom=MEDIUM if row == r - 1 else THIN)
+    ws.column_dimensions["A"].width = 14
+    for col in range(2, 9):
+        ws.column_dimensions[get_column_letter(col)].width = 16
+    _page_setup(ws, view, generated_at)
+    ws.freeze_panes = "B1"                       # keep the period column
+
+
 def teachers_xlsx(views: list[dict], generated_at: str) -> bytes:
-    """One workbook, one worksheet per teacher; each slot cell shows
-    the students with their subject (rooms omitted)."""
-    return _batch_xlsx(
-        views, generated_at,
-        lambda v: _sheet_title(v["teacher_name"], v["teacher_id"]),
-        lambda slot: "、".join(
-            f"{e['student_name']}({e['subject_name']})"
-            for e in slot["entries"]))
+    """One workbook, one week-matrix worksheet per teacher (period
+    rows × day columns, students in the cells) — the Excel twin of the
+    teacher PDF handout."""
+    if not views:
+        raise ValueError("nothing to export")
+    wb = Workbook()
+    wb.remove(wb.active)
+    for v in views:
+        ws = wb.create_sheet(
+            title=_sheet_title(v["teacher_name"], v["teacher_id"]))
+        _teacher_matrix_sheet(ws, v, generated_at)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

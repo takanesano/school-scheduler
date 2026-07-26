@@ -205,12 +205,6 @@ def clip_view(view: dict, date_from: str | None,
     return {**view, "weeks": weeks}
 
 
-def _slot_prefix(slot: dict) -> str:
-    label = (slot.get("label") or "").strip()
-    p = _circled(slot["period"])
-    return f"{p}{label} " if label else f"{p} "
-
-
 def _student_cell_lines(cell: dict) -> list[str]:
     """Two rows per day: subjects on top, their periods (1限 style)
     below — comma-delimited, aligned by lesson order."""
@@ -223,15 +217,104 @@ def _student_cell_lines(cell: dict) -> list[str]:
             "、".join(f"{p}限" for p, _e in entries)]
 
 
-def _teacher_lines(slot: dict) -> list[str]:
-    return [f"{_slot_prefix(slot)}{e['subject_name']} "
-            f"{e['student_name']}さん {e['room_name']}"
-            for e in slot["entries"]]
+# teacher handout: one MATRIX per week — rows are periods (1限 style),
+# columns are the week's days, each cell lists the students the teacher
+# takes in that slot. Weeks stack down the page.
+PERIOD_COL_W = 22.0
 
 
-def _teacher_cell_lines(cell: dict) -> list[str]:
-    return [line for slot in cell["slots"]
-            for line in _teacher_lines(slot)]
+def _teacher_matrix_pages(pdf: _HandoutPDF, view: dict,
+                          title: str) -> None:
+    pdf.page_title = title
+    pdf.add_page()
+    top = MARGIN + HEADER_H
+    bottom = PAGE_H - FOOTER_H - 2.0
+    periods = view["periods"]
+    label_of: dict[int, str] = {}
+    for w in view["weeks"]:
+        for c in w:
+            for s in c["slots"]:
+                if s["label"] and s["period"] not in label_of:
+                    label_of[s["period"]] = s["label"]
+    day_w = (GRID_W - PERIOD_COL_W) / 7
+    y = top
+    first = True
+    for week in view["weeks"]:
+        # students per (period, day) and the wrapped cell lines
+        pdf.set_font("noto", size=SIZE_BODY)
+        grid: list[list[list[str]]] = []
+        for p in periods:
+            row = []
+            for cell in week:
+                names = "、".join(
+                    e["student_name"]
+                    for s in cell["slots"] if s["period"] == p
+                    for e in s["entries"])
+                row.append(_wrap(pdf, names, day_w - 1.6)
+                           if names else [])
+            grid.append(row)
+        row_hs = [max(2 * CELL_PAD
+                      + LINE_H * max([len(ls) for ls in row] + [1]), 6.0)
+                  for row in grid]
+        block_h = WDAY_H + sum(row_hs)
+        if not first and y + block_h > bottom:
+            pdf.add_page()
+            y = top
+        first = False
+        # date header row (label column blank)
+        pdf.set_draw_color(0)
+        pdf.set_fill_color(235)
+        pdf.set_xy(MARGIN, y)
+        pdf.set_font("noto", size=SIZE_DATE)
+        pdf.set_text_color(0)
+        pdf.cell(PERIOD_COL_W, WDAY_H, "", border=1, fill=True)
+        for i, cell in enumerate(week):
+            d = dt.date.fromisoformat(cell["date"])
+            wd = cell["weekday"]
+            pdf.set_xy(MARGIN + PERIOD_COL_W + i * day_w, y)
+            if wd == "Sun":
+                pdf.set_text_color(190, 30, 30)
+            elif wd == "Sat":
+                pdf.set_text_color(30, 60, 190)
+            else:
+                pdf.set_text_color(0)
+            if not cell["in_term"]:
+                pdf.set_text_color(150)
+            pdf.cell(day_w, WDAY_H,
+                     f"{d.month}/{d.day}({WEEKDAY_JA[wd]})",
+                     border=1, align="C", fill=True)
+        ry = y + WDAY_H
+        for pi, p in enumerate(periods):
+            rh = row_hs[pi]
+            # period label: 1限 (+ the time when known)
+            pdf.set_draw_color(0)
+            pdf.rect(MARGIN, ry, PERIOD_COL_W, rh)
+            pdf.set_text_color(0)
+            label = f"{p}限"
+            if label_of.get(p):
+                label += f" {label_of[p]}"
+            size = _fit_text(pdf, label, PERIOD_COL_W - 1.6, SIZE_DATE)
+            pdf.set_font("noto", size=size)
+            pdf.set_xy(MARGIN + 0.8, ry)
+            pdf.cell(PERIOD_COL_W - 1.6, rh,
+                     _truncated(pdf, label, PERIOD_COL_W - 1.6))
+            for i, cell in enumerate(week):
+                x = MARGIN + PERIOD_COL_W + i * day_w
+                has_slot = any(s["period"] == p for s in cell["slots"])
+                if not cell["in_term"] or not has_slot:
+                    pdf.set_fill_color(245)
+                    pdf.rect(x, ry, day_w, rh, style="DF")
+                    continue
+                pdf.rect(x, ry, day_w, rh)
+                pdf.set_font("noto", size=SIZE_BODY)
+                pdf.set_text_color(0)
+                cy = ry + CELL_PAD
+                for line in grid[pi][i]:
+                    pdf.set_xy(x + 0.8, cy)
+                    pdf.cell(day_w - 1.6, LINE_H, line)
+                    cy += LINE_H
+            ry += rh
+        y = ry + 2.5                      # small gap between week blocks
 
 
 def term_label(view: dict) -> str:
@@ -432,12 +515,14 @@ def students_pdf(views: list[dict], generated_at: str) -> bytes:
 
 
 def teachers_pdf(views: list[dict], generated_at: str) -> bytes:
-    """One document, one calendar per teacher (each starts a new page)."""
+    """One document, one week-matrix timetable per teacher (each
+    starts a new page): period rows × day columns, students in the
+    cells, one block per week."""
     if not views:
         raise ValueError("no teachers to print")
     pdf = _HandoutPDF(term_label(views[0]), generated_at)
     for v in views:
         pdf.term_label = term_label(v)
-        _grid_pages(pdf, v, f"時間割(講師用) {v['teacher_name']}",
-                    _teacher_cell_lines)
+        _teacher_matrix_pages(pdf, v,
+                              f"時間割(講師用) {v['teacher_name']}")
     return bytes(pdf.output())
