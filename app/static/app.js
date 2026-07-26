@@ -16,6 +16,7 @@ const state = { tab: "schedule", keep: false, caution: true,
                 lastGen: null,
                 selectMode: false, selectedLessons: new Set(),
                 repeatWeeks: 4, gridClip: null,
+                addSel: null, reopenSlotAdd: null,
                 objOrder: Object.keys(OBJ_LABELS),
                 hiddenTeachers: new Set(), hiddenStudents: new Set(),
                 filterSort: "name",
@@ -1424,6 +1425,20 @@ async function renderSchedule(root) {
     </div>
     <p class="muted">Additions that break a constraint are rejected with an
       explanation; confirm to override.</p></div>`);
+  // keep the last-used selections across adds and re-renders, so
+  // consecutive entries continue from the previous ones
+  const setSel = (sel, val) => {
+    if (sel && val && [...sel.options].some((o) => o.value === val)) {
+      sel.value = val;
+    }
+  };
+  if (state.addSel) {
+    setSel($("#l-student", add), state.addSel.student_id);
+    setSel($("#l-subject", add), state.addSel.subject_id);
+    setSel($("#l-teacher", add), state.addSel.teacher_id);
+    setSel($("#l-room", add), state.addSel.room_id);
+    setSel($("#l-slot", add), state.addSel.timeslot_id);
+  }
   $("#add-lesson", add).onclick = async () => {
     const body = {
       student_id: $("#l-student", add).value,
@@ -1432,6 +1447,7 @@ async function renderSchedule(root) {
       room_id: $("#l-room", add).value,
       timeslot_id: $("#l-slot", add).value,
     };
+    state.addSel = { ...body };
     if (!state.caution) {
       try {
         const res = await api("POST", "/api/lessons", { ...body, force: true });
@@ -1761,6 +1777,17 @@ async function renderSchedule(root) {
         <button class="action" id="a-save">Add</button>
         <button class="action secondary" id="a-cancel">Cancel</button>
       </div></div>`);
+    const setSel = (sel, val) => {
+      if (sel && val && [...sel.options].some((o) => o.value === val)) {
+        sel.value = val;
+      }
+    };
+    if (state.addSel) {
+      setSel($("#a-student", form), state.addSel.student_id);
+      setSel($("#a-subject", form), state.addSel.subject_id);
+      setSel($("#a-teacher", form), state.addSel.teacher_id);
+      setSel($("#a-room", form), state.addSel.room_id);
+    }
     $("#a-cancel", form).onclick = () => form.remove();
     $("#a-save", form).onclick = async () => {
       const body = {
@@ -1770,6 +1797,8 @@ async function renderSchedule(root) {
         room_id: $("#a-room", form).value,
         timeslot_id: slotId,
       };
+      state.addSel = { ...body };
+      state.reopenSlotAdd = slotId;   // keep the flow going after add
       if (!state.caution) {
         try {
           const res = await api("POST", "/api/lessons",
@@ -1779,7 +1808,10 @@ async function renderSchedule(root) {
               + "see Status", true);
           }
           render();
-        } catch (e) { toast(e.message, true); }
+        } catch (e) {
+          state.reopenSlotAdd = null;
+          toast(e.message, true);
+        }
         return;
       }
       try {
@@ -1792,7 +1824,12 @@ async function renderSchedule(root) {
           try {
             await api("POST", "/api/lessons", { ...body, force: true });
             render();
-          } catch (e2) { toast(e2.message, true); }
+          } catch (e2) {
+            state.reopenSlotAdd = null;
+            toast(e2.message, true);
+          }
+        } else {
+          state.reopenSlotAdd = null;
         }
       }
     };
@@ -1957,6 +1994,12 @@ async function renderSchedule(root) {
       return box;
     }, dropHook));
     applyFilter();
+    if (state.reopenSlotAdd) {
+      const target = grid.querySelector(
+        `.cal-slot[data-slot-id="${CSS.escape(state.reopenSlotAdd)}"]`);
+      state.reopenSlotAdd = null;
+      if (target) openSlotAdd(target, target.dataset.slotId);
+    }
   }
 
   // names in the Status workload tables jump to (and flash) the
