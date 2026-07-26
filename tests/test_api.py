@@ -384,6 +384,48 @@ def test_generate_v2_keeps_existing_schedule_it_cannot_beat(client):
     assert [l["timeslot_id"] for l in lessons] == ["mon-2"]
 
 
+def test_cancel_generation_mid_solve(client, monkeypatch):
+    """POST /api/schedule/cancel stops a running generation; the stored
+    schedule is untouched and the response says cancelled."""
+    import threading
+    import time
+
+    import app.main as m
+    from app.scheduler import SolveCancelled
+    seed_world(client)
+    lid = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"}).json()["id"]
+
+    started = threading.Event()
+
+    def slow_solve(data, fixed_lessons=None, should_stop=None, **kw):
+        started.set()
+        for _ in range(400):                    # ~20 s unless cancelled
+            if should_stop and should_stop():
+                raise SolveCancelled()
+            time.sleep(0.05)
+        raise AssertionError("was never cancelled")
+
+    monkeypatch.setattr(m, "solve", slow_solve)
+    out = []
+    th = threading.Thread(target=lambda: out.append(
+        client.post("/api/schedule/generate", json={})))
+    th.start()
+    assert started.wait(5), "generation never started"
+    r = client.post("/api/schedule/cancel")
+    assert r.status_code == 200
+    th.join(10)
+    assert out and out[0].json()["cancelled"] is True
+    # nothing was written or cleared
+    lessons = client.get("/api/schedule").json()["lessons"]
+    assert [l["id"] for l in lessons] == [lid]
+
+
+def test_cancel_without_running_generation(client):
+    assert client.post("/api/schedule/cancel").status_code == 404
+
+
 def test_generate_rejects_unknown_solver(client):
     r = client.post("/api/schedule/generate", json={"solver": "v3"})
     assert r.status_code == 422
@@ -439,16 +481,61 @@ def test_generate_honors_objective_order(client):
 # ------------------------------------------------------------------ settings
 
 def test_settings_defaults_and_roundtrip(client):
+    from app.scheduler import OBJECTIVE_TERMS
+    default_order = list(OBJECTIVE_TERMS)
     assert client.get("/api/settings").json() == {
         "teacher_capacity": 2, "student_day_cap": 2, "single_day_max": 1,
-        "objective_caps": {"student_day_gap": 0}}
+        "objective_caps": {"student_day_gap": 0},
+        "objective_order": default_order}
     r = client.put("/api/settings", json={
         "teacher_capacity": 1, "student_day_cap": 3, "single_day_max": 2,
         "objective_caps": {"teacher_slot_spread": 1}})
     assert r.status_code == 200
     assert client.get("/api/settings").json() == {
         "teacher_capacity": 1, "student_day_cap": 3, "single_day_max": 2,
-        "objective_caps": {"teacher_slot_spread": 1}}
+        "objective_caps": {"teacher_slot_spread": 1},
+        "objective_order": default_order}
+
+
+def test_objective_order_persists_and_drives_generate(client):
+    """The drag-sorted priority order is a stored setting: it survives
+    reloads, tolerates omission on later PUTs, rejects
+    non-permutations, and a generate WITHOUT an explicit order uses
+    it."""
+    from app.scheduler import OBJECTIVE_TERMS
+    days_first = ["student_double_day", "student_day_gap",
+                  "student_teacher_pair",
+                  "teacher_working_day", "teacher_single_day",
+                  "teacher_slot_spread", "teacher_day_spread"]
+    r = client.put("/api/settings", json={"objective_order": days_first})
+    assert r.status_code == 200
+    assert r.json()["objective_order"] == days_first
+    # a PUT without the field keeps the stored order
+    client.put("/api/settings", json={"teacher_capacity": 2})
+    assert client.get("/api/settings").json()["objective_order"] == \
+        days_first
+    assert client.put("/api/settings", json={
+        "objective_order": ["student_double_day"]}).status_code == 422
+
+    # same scenario as test_generate_honors_objective_order, but the
+    # order comes from settings instead of the request
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_subjects",
+                json={"teacher_id": "t2", "subject_id": "math"})
+    client.post("/api/teacher_availability",
+                json={"teacher_id": "t2", "timeslot_id": "tue-1"})
+    client.post("/api/rooms", json={"id": "r2", "name": "Room 2"})
+    for st in ("s1", "s2"):
+        client.post("/api/student_needs",
+                    json={"student_id": st, "subject_id": "math",
+                          "sessions": 1})
+    assert client.post("/api/schedule/generate",
+                       json={}).json()["complete"] is True
+    body = client.get("/api/schedule").json()
+    assert body["objective"]["total_days"] == 1
+    assert len({l["teacher_id"] for l in body["lessons"]}) == 1
+    assert list(OBJECTIVE_TERMS) != days_first   # scenario is meaningful
 
 
 @pytest.mark.parametrize("body", [
