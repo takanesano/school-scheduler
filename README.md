@@ -169,14 +169,18 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   more points), minimized as the draggable "Students taught by their
   assigned teacher" condition — which can itself be made always-active
   like any other. Here too, **drag to select a block** and set every
-  cell to one value, clear them, or copy/paste the block.
+  cell to one value, clear them, or copy/paste the block — with the
+  same ↩ Undo support.
 - **Availability** tab — click cells in the per-date grid to toggle
   teacher and student availability. **Drag across cells to select a
   rectangle**, then use the action bar to make the whole block
   available / unavailable / inverted, or **copy** it and **paste** it
   elsewhere (select the target's top-left cell — a click with a tiny
   drag selects a single cell — and paste; teacher ↔ student grids are
-  interchangeable). Bulk changes are applied in one transaction.
+  interchangeable). Bulk changes are applied in one transaction, and
+  the tab's own **↩ Undo** button walks back grid edits (cell toggles
+  and block edits alike) — it shares one history with the timetable's
+  undo.
 - **CSV import/export** tab — upload or download any table as CSV.
   The **Database backup** panel below it downloads the whole database
   as one timestamped `.db` file (master data, the schedule with its

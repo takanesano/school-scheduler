@@ -190,7 +190,14 @@ weeks and marks non-term days `in_term: false`.
   PATCH / bulk_update / repeat / delete) calls `_push_undo(conn,
   label)` right after its 409-gate and before writing — a full JSON
   snapshot of the lessons table (ids + locked included) into the
-  `undo_stack` table, capped at UNDO_LIMIT=20. `POST
+  `undo_stack` table, capped at UNDO_LIMIT=30. GRID edits
+  (availability toggles/blocks, assignment changes/blocks) push
+  INVERSE DELTAS instead ({"avail": {table, add, remove}} /
+  {"pairs": {set, clear}} — computed from prior state AFTER a
+  successful write; no-ops push nothing), so undoing a grid edit only
+  touches the affected cells. One shared stack; undo dispatches on
+  snapshot shape (list = lessons). GET /api/undo serves {count, label}
+  for the grid tabs' ↩ buttons (`gridUndoButton`). `POST
   /api/schedule/undo` restores the newest snapshot verbatim (explicit
   ids on reinsert keep older snapshots valid); IntegrityError (master
   data deleted since) drops the stale entry and 409s. Generate and
