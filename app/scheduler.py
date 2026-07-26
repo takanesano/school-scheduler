@@ -291,12 +291,14 @@ def coverage_report(data: Dataset, lessons: list[Lesson]) -> list[Violation]:
             out.append(Violation(
                 "need_unmet",
                 f"Student {data.students.get(st, st)} needs {need} "
-                f"{data.subjects.get(su, su)} sessions but has {got}"))
+                f"{data.subjects.get(su, su)} sessions but has only "
+                f"{got} (short by {need - got})"))
         elif got > need:
             out.append(Violation(
                 "need_exceeded",
                 f"Student {data.students.get(st, st)} needs {need} "
-                f"{data.subjects.get(su, su)} sessions but has {got}"))
+                f"{data.subjects.get(su, su)} sessions but has {got} "
+                f"({got - need} more than needed)"))
     for (st, su), got in sorted(scheduled.items()):
         out.append(Violation(
             "lesson_without_need",
