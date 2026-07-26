@@ -17,6 +17,7 @@ const state = { tab: "schedule", keep: false, caution: true,
                 selectMode: false, selectedLessons: new Set(),
                 repeatWeeks: 4, gridClip: null,
                 addSel: null, reopenSlotAdd: null,
+                lessonClip: null, pasteArmed: false,
                 objOrder: Object.keys(OBJ_LABELS),
                 hiddenTeachers: new Set(), hiddenStudents: new Set(),
                 filterSort: "name",
@@ -1497,7 +1498,8 @@ async function renderSchedule(root) {
     [...state.selectedLessons].filter(id => liveIds.has(id)));
   const nSel = state.selectedLessons.size;
 
-  const grid = el(`<div class="panel${state.selectMode ? " selecting" : ""}">
+  const grid = el(`<div class="panel${state.selectMode ? " selecting" : ""}${
+    state.pasteArmed ? " pasting" : ""}">
     <div class="tt-head"><h2>Timetable
       <span class="muted" id="lesson-count">(${totalLessons} lessons)</span></h2>
       <button class="action secondary tt-undo" id="undo-btn"${
@@ -1533,6 +1535,12 @@ async function renderSchedule(root) {
         ${opt(rooms, r => r.name)}</select>
       <button class="action" id="bulk-go"${nSel ? "" : " disabled"}>Apply</button>
       <button class="action secondary" id="lock-sel"${nSel ? "" : " disabled"}></button>
+      <button class="action secondary" id="copy-sel"${nSel ? "" : " disabled"}>Copy</button>
+      <button class="action secondary" id="paste-sel"${
+        state.lessonClip ? "" : " disabled"}>${
+        state.pasteArmed ? "✕ cancel paste" : "Paste…"}</button>
+      ${state.pasteArmed ? `<span class="muted">click a timeslot to
+        paste ${state.lessonClip.length} lesson(s)</span>` : ""}
     </div>` : ""}</div>`);
   $("#undo-btn", grid).onclick = async () => {
     try {
@@ -1567,6 +1575,8 @@ async function renderSchedule(root) {
     if (repGo) repGo.disabled = !n;
     if (bulkGo) bulkGo.disabled = !n;
     if (selClear) selClear.disabled = !n;
+    const copySel = $("#copy-sel", grid);
+    if (copySel) copySel.disabled = !n;
     if (lockSel) {
       lockSel.disabled = !n;
       const allLocked = n > 0 &&
@@ -1589,6 +1599,30 @@ async function renderSchedule(root) {
     };
   }
   updateSelBar();
+  const copyBtn = $("#copy-sel", grid);
+  if (copyBtn) {
+    copyBtn.onclick = () => {
+      const clip = schedule.lessons
+        .filter(l => state.selectedLessons.has(l.id))
+        .map(l => ({ student_id: l.student_id, subject_id: l.subject_id,
+                     teacher_id: l.teacher_id, room_id: l.room_id,
+                     timeslot_id: l.timeslot_id, locked: l.locked }));
+      if (!clip.length) return;
+      state.lessonClip = clip;
+      state.pasteArmed = false;
+      toast(`Copied ${clip.length} lesson(s) — press Paste… and click `
+        + "a target timeslot");
+      render();
+    };
+  }
+  const pasteBtn = $("#paste-sel", grid);
+  if (pasteBtn) {
+    pasteBtn.onclick = () => {
+      if (!state.lessonClip) return;
+      state.pasteArmed = !state.pasteArmed;
+      render();
+    };
+  }
   if (lockSel) {
     lockSel.onclick = async () => {
       const ids = [...state.selectedLessons];
@@ -2125,6 +2159,43 @@ async function renderSchedule(root) {
         e.stopPropagation();
         e.preventDefault();
         bandSuppress = false;
+      }
+    }, true);
+
+    // paste-target mode: while armed, any click inside a timeslot
+    // pastes the copied block anchored at that slot
+    grid.addEventListener("click", async (e) => {
+      if (!state.pasteArmed || !state.lessonClip) return;
+      const block = e.target.closest(".cal-slot[data-slot-id]");
+      if (!block) return;
+      e.stopPropagation();
+      e.preventDefault();
+      state.pasteArmed = false;
+      const body = { lessons: state.lessonClip,
+                     target_timeslot_id: block.dataset.slotId };
+      const report = (res) => {
+        let msg = `Pasted ${res.created} lesson(s)`;
+        if (res.skipped_duplicate) {
+          msg += ` · ${res.skipped_duplicate} already existed`;
+        }
+        if (res.skipped_no_slot) {
+          msg += ` · ${res.skipped_no_slot} skipped (no matching timeslot)`;
+        }
+        toast(msg, res.created === 0);
+      };
+      try {
+        report(await api("POST", "/api/lessons/paste", body));
+        render();
+      } catch (e2) {
+        if (await appConfirm(
+          `Pasting breaks constraints:\n\n${e2.message}`,
+          "Paste anyway")) {
+          try {
+            report(await api("POST", "/api/lessons/paste",
+              { ...body, force: true }));
+            render();
+          } catch (e3) { toast(e3.message, true); render(); }
+        } else { render(); }
       }
     }, true);
   }
