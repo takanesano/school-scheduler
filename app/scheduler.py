@@ -350,6 +350,9 @@ class _State:
         self.room_teachers: Counter = Counter()      # (r, s) -> distinct t
         # (student, date) -> set of occupied period numbers
         self.student_day: dict[tuple[str, str], set[int]] = defaultdict(set)
+        # (student, subject, date) -> lessons; greedy uses it to steer
+        # away from same-subject doubles (soft student_subject_repeat)
+        self.student_subj_day: Counter = Counter()
         self.teacher_day: Counter = Counter()        # (t, date) -> lessons
         # H11: student -> hard whitelist of allowed teachers
         self.hard_pairs = hard_pair_teachers(data)
@@ -393,6 +396,7 @@ class _State:
         slot = self.data.timeslots[l.timeslot_id]
         self.teacher_day[(l.teacher_id, slot.date)] += 1
         self.student_day[(l.student_id, slot.date)].add(slot.period)
+        self.student_subj_day[(l.student_id, l.subject_id, slot.date)] += 1
 
     def remove(self, l: Lesson) -> None:
         self.teacher_load[(l.teacher_id, l.timeslot_id)] -= 1
@@ -406,6 +410,7 @@ class _State:
         slot = self.data.timeslots[l.timeslot_id]
         self.teacher_day[(l.teacher_id, slot.date)] -= 1
         self.student_day[(l.student_id, slot.date)].discard(slot.period)
+        self.student_subj_day[(l.student_id, l.subject_id, slot.date)] -= 1
 
 
 def check_input_problems(data: Dataset) -> list[str]:
@@ -491,6 +496,8 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
     teachers_for: dict[str, list[str]] = defaultdict(list)
     for (t, su) in sorted(data.teacher_subjects):
         teachers_for[su].append(t)
+    # (student, subject) -> (date -> bucket, bucket -> dates), built lazily
+    bucket_cache: dict[tuple[str, str], tuple[dict, dict]] = {}
 
     def candidates(st: str, su: str,
                    limit: int | None = None) -> list[tuple[str, str, str]]:
@@ -502,25 +509,48 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
         ranked = sorted(teachers_for.get(su, []),
                         key=lambda t: (data.teacher_students.get((st, t), 99),
                                        state.teacher_total[t], t))
+        # spread preference: bucket map over the student's available
+        # dates, one bucket per needed session (soft
+        # student_subject_spread)
+        ck = (st, su)
+        if ck not in bucket_cache:
+            n = data.student_needs.get(ck, 1)
+            bmap = subject_buckets(data, st, n) if n >= 2 else {}
+            bdates: dict[int, list[str]] = defaultdict(list)
+            for date, b in bmap.items():
+                bdates[b].append(date)
+            bucket_cache[ck] = (bmap, bdates)
+        bmap, bdates = bucket_cache[ck]
         opts = []
         for i, s in enumerate(slot_ids):
             if (st, s) not in data.student_availability:
                 continue
             # prefer days where the student has no lesson yet (soft O1),
-            # then unpenalized slots (soft slot_penalty term)
-            busy_day = bool(state.student_day[(st, data.timeslots[s].date)])
+            # then days without this subject yet (soft
+            # student_subject_repeat), then unpenalized slots (soft
+            # slot_penalty term)
+            date = data.timeslots[s].date
+            busy_day = bool(state.student_day[(st, date)])
+            subj_rep = bool(state.student_subj_day[(st, su, date)])
+            # prefer buckets that hold no session of this subject yet
+            bucket_occ = False
+            if bmap:
+                bucket_occ = any(
+                    state.student_subj_day[(st, su, d2)]
+                    for d2 in bdates.get(bmap.get(date, 0), ()))
             pen = data.timeslots[s].penalty
             for t in ranked:
                 if (t, s) not in data.teacher_availability:
                     continue
                 for r in room_ids:
                     if state.fits(st, su, t, r, s):
-                        opts.append((busy_day, pen, i, s, t, r))
+                        opts.append((busy_day, subj_rep, bucket_occ,
+                                     pen, i, s, t, r))
                         break  # one room per (slot, teacher) is enough
             if limit is not None and len(opts) >= limit:
                 break
-        opts.sort(key=lambda x: (x[0], x[1], x[2]))
-        return [(s, t, r) for (_, _, _, s, t, r) in opts]
+        opts.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
+        return [(s, t, r) for (*_, s, t, r) in opts]
 
     placed: list[Lesson] = []
     nodes = 0
@@ -698,7 +728,8 @@ OBJECTIVE_TERMS = ("student_double_day", "student_day_gap",
                    "student_teacher_pair",
                    "teacher_slot_spread", "teacher_working_day",
                    "teacher_single_day", "teacher_day_spread",
-                   "slot_penalty")
+                   "slot_penalty", "student_subject_repeat",
+                   "teacher_idle_gap", "student_subject_spread")
 
 OBJECTIVE_LABELS = {
     "student_double_day": "Student days with two or more lessons",
@@ -709,6 +740,10 @@ OBJECTIVE_LABELS = {
     "teacher_single_day": "Teacher days with too few lessons",
     "teacher_day_spread": "Working-day spread between teachers",
     "slot_penalty": "Lessons in penalized timeslots",
+    "student_subject_repeat": "Same subject twice on one student day",
+    "teacher_idle_gap": "Idle periods inside teacher days",
+    "student_subject_spread": "Subject sessions bunched, not spread "
+                              "over the term",
 }
 
 
@@ -747,6 +782,76 @@ def slot_penalty_points(data: Dataset, lessons: list[Lesson]) -> int:
     periods as to-be-avoided without forbidding them."""
     return sum(data.timeslots[l.timeslot_id].penalty
                for l in lessons if l.timeslot_id in data.timeslots)
+
+
+def student_subject_repeats(data: Dataset, lessons: list[Lesson]) -> int:
+    """Soft term: extra same-subject lessons on one (student, day) —
+    a student taking the same subject twice on a day counts 1 (three
+    times counts 2, at higher day caps)."""
+    per: Counter = Counter()
+    for l in lessons:
+        slot = data.timeslots.get(l.timeslot_id)
+        if slot is not None:
+            per[(l.student_id, l.subject_id, slot.date)] += 1
+    return sum(n - 1 for n in per.values() if n >= 2)
+
+
+def teacher_idle_periods(data: Dataset, lessons: list[Lesson]) -> int:
+    """Soft term: idle periods sandwiched inside a teacher's day — the
+    span from their first to their last busy period, minus the periods
+    actually taught. 0 = every teacher's day is one contiguous block."""
+    per_day: dict[tuple[str, str], set[int]] = defaultdict(set)
+    for l in lessons:
+        slot = data.timeslots.get(l.timeslot_id)
+        if slot is not None:
+            per_day[(l.teacher_id, slot.date)].add(slot.period)
+    return sum(max(ps) - min(ps) + 1 - len(ps) for ps in per_day.values())
+
+
+def subject_buckets(data: Dataset, student: str,
+                    sessions: int) -> dict[str, int]:
+    """date -> bucket index over the student's AVAILABLE dates.
+
+    The available dates (sorted) are split into ``sessions`` nearly
+    equal contiguous buckets; a well-spread subject puts one session in
+    each. Shared by the objective term, the greedy preference and the
+    CP model so all three agree on what "spread" means."""
+    dates = sorted({data.timeslots[s].date
+                    for (st, s) in data.student_availability
+                    if st == student and s in data.timeslots})
+    k = max(1, min(sessions, len(dates)))
+    n = len(dates)
+    out = {}
+    for i, date in enumerate(dates):
+        out[date] = min(i * k // n, k - 1) if n else 0
+    return out
+
+
+def student_subject_bunching(data: Dataset, lessons: list[Lesson]) -> int:
+    """Soft term: how bunched-up each (student, subject)'s sessions are.
+
+    The student's available dates are split into one bucket per needed
+    session (see :func:`subject_buckets`); every session beyond the
+    per-bucket quota costs 1. 0 = each subject visits its buckets
+    evenly across the whole term."""
+    per: dict[tuple[str, str], Counter] = defaultdict(Counter)
+    for l in lessons:
+        slot = data.timeslots.get(l.timeslot_id)
+        if slot is not None:
+            per[(l.student_id, l.subject_id)][slot.date] += 1
+    total = 0
+    for (st, su), by_date in sorted(per.items()):
+        n = data.student_needs.get((st, su), sum(by_date.values()))
+        if n < 2:
+            continue
+        buckets = subject_buckets(data, st, n)
+        k = max(buckets.values(), default=0) + 1
+        quota = -(-n // k)                     # ceil(n / buckets)
+        counts: Counter = Counter()
+        for date, c in by_date.items():
+            counts[buckets.get(date, 0)] += c
+        total += sum(max(0, c - quota) for c in counts.values())
+    return total
 
 
 def teacher_single_days(data: Dataset, lessons: list[Lesson],
@@ -796,6 +901,9 @@ def objective_term_values(data: Dataset,
         "teacher_day_spread":
             (max(day_counts) - min(day_counts)) if day_counts else 0,
         "slot_penalty": slot_penalty_points(data, lessons),
+        "student_subject_repeat": student_subject_repeats(data, lessons),
+        "teacher_idle_gap": teacher_idle_periods(data, lessons),
+        "student_subject_spread": student_subject_bunching(data, lessons),
     }
 
 

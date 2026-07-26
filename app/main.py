@@ -987,7 +987,8 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     sstats = student_day_stats(data, lessons)
     s = get_settings(conn)
     (double_days, gap_days, pair_miss, slot_spread, total_days,
-     single_days, day_spread, slot_penalty) = schedule_objective(
+     single_days, day_spread, slot_penalty, subject_repeats,
+     teacher_idle, subject_bunch) = schedule_objective(
         data, lessons, single_day_max=s["single_day_max"])
     return {
         "lessons": [l.__dict__ for l in lessons],
@@ -1008,7 +1009,10 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
                       "slot_spread": slot_spread, "total_days": total_days,
                       "teacher_single_days": single_days,
                       "day_spread": day_spread,
-                      "slot_penalty": slot_penalty},
+                      "slot_penalty": slot_penalty,
+                      "subject_repeats": subject_repeats,
+                      "teacher_idle": teacher_idle,
+                      "subject_bunching": subject_bunch},
         "undo": _undo_info(conn),
     }
 

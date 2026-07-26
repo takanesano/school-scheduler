@@ -41,8 +41,8 @@ from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, SolveCancelled,
                         SolveResult, _slot_sort_key, coverage_report,
                         eligible_teachers, hard_pair_teachers,
                         objective_term_values, optimize_teacher_days,
-                        pair_miss_points, slot_penalty_points, solve,
-                        validate)
+                        pair_miss_points, slot_penalty_points,
+                        subject_buckets, solve, validate)
 
 
 @dataclass(frozen=True)
@@ -66,6 +66,13 @@ class ObjectiveWeights:
     teacher_day_spread: float = 0.0   # per day of max-min day-count spread
     slot_penalty: float = 0.0         # per timeslot-penalty POINT (see
     #                                    scheduler.slot_penalty_points)
+    student_subject_repeat: float = 0.0   # per extra same-subject lesson
+    #                                       on one (student, day)
+    teacher_idle_gap: float = 0.0     # per idle period inside a
+    #                                   teacher's working day
+    student_subject_spread: float = 0.0   # per over-quota session in a
+    #                                       term bucket (see
+    #                                       scheduler.subject_buckets)
     changed_lesson: float = 0.0       # per lesson differing from a
     #                                   reference schedule (rescheduling)
 
@@ -82,9 +89,13 @@ class ObjectiveWeights:
         if sorted(order) != sorted(OBJECTIVE_TERMS):
             raise ValueError(
                 f"order must be a permutation of {OBJECTIVE_TERMS}")
+        # ratio 100 between the top ranks, 10 between the bottom ones:
+        # the top must stay <= ~1e14 so CP-SAT's int64 objective cannot
+        # overflow on big terms (coefficient x hundreds of vars), and
+        # dominance matters most at the top of the user's ordering
         magnitudes = [100_000_000_000_000.0, 1_000_000_000_000.0,
                       10_000_000_000.0, 100_000_000.0, 1_000_000.0,
-                      10_000.0, 100.0, 1.0]
+                      100_000.0, 10_000.0, 1_000.0, 100.0, 10.0, 1.0]
         return cls(**{name: magnitudes[i] for i, name in enumerate(order)})
 
 
@@ -367,11 +378,15 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     pin_room_slot = Counter((l.room_id, l.timeslot_id) for l in pinned)
     pin_sdp: Counter = Counter()       # (student, date, period)
     pin_teacher_day: Counter = Counter()
+    pin_ssd: Counter = Counter()       # (student, subject, date)
+    pin_tdp: Counter = Counter()       # (teacher, date, period)
     for l in pinned:
         slot = data.timeslots.get(l.timeslot_id)
         if slot:
             pin_sdp[(l.student_id, slot.date, slot.period)] += 1
             pin_teacher_day[(l.teacher_id, slot.date)] += 1
+            pin_ssd[(l.student_id, l.subject_id, slot.date)] += 1
+            pin_tdp[(l.teacher_id, slot.date, slot.period)] += 1
 
     # ---- hint-derived values for every AUXILIARY variable.
     # CP-SAT treats a hint as one candidate assignment: if any variable
@@ -383,6 +398,8 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     hint_day_periods: dict[tuple[str, str], list[int]] = defaultdict(list)
     hint_rst: set[tuple[str, str, str]] = set()
     hint_tload: Counter = Counter()         # teacher -> total lessons
+    hint_ssd: Counter = Counter()           # (student, subject, date)
+    hint_tdp: Counter = Counter()           # (teacher, date, period)
     if hint is not None:
         for l in hint:
             slot = data.timeslots.get(l.timeslot_id)
@@ -392,6 +409,8 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             hint_day_periods[(l.student_id, slot.date)].append(slot.period)
             hint_rst.add((l.room_id, l.timeslot_id, l.teacher_id))
             hint_tload[l.teacher_id] += 1
+            hint_ssd[(l.student_id, l.subject_id, slot.date)] += 1
+            hint_tdp[(l.teacher_id, slot.date, slot.period)] += 1
 
     def hint_aux(var, value):
         if hint is not None:
@@ -405,6 +424,8 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     by_sdp = defaultdict(list)         # (student, date, period)
     by_teacher_day = defaultdict(list)
     by_teacher = defaultdict(list)
+    by_ssd = defaultdict(list)         # (student, subject, date)
+    by_tdp = defaultdict(list)         # (teacher, date, period)
     for (st, su, sid, t, r), v in x.items():
         slot = data.timeslots[sid]
         by_student_slot[(st, sid)].append(v)
@@ -414,6 +435,8 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         by_sdp[(st, slot.date, slot.period)].append(v)
         by_teacher_day[(t, slot.date)].append(v)
         by_teacher[t].append(v)
+        by_ssd[(st, su, slot.date)].append(v)
+        by_tdp[(t, slot.date, slot.period)].append(v)
 
     # ---- hard constraints (H5–H8; H1–H4 are enforced by var filtering)
     for (st, sid), vs in sorted(by_student_slot.items()):
@@ -583,6 +606,122 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             pinned_pen = slot_penalty_points(data, pinned)
             m.Add(sum(pw * v for (pw, v) in pen_terms)
                   <= caps["slot_penalty"] - pinned_pen)
+    if w.student_subject_repeat or "student_subject_repeat" in caps:
+        # rep >= (same-subject lessons on the day) - 1, minimized: one
+        # IntVar per (student, subject, date) that can actually repeat
+        rep_vars = []
+        for key in sorted(set(by_ssd) | set(pin_ssd)):
+            (st, su, _date) = key
+            vs = by_ssd.get(key, [])
+            ub = min(len(vs), remaining.get((st, su), 0)) \
+                + pin_ssd.get(key, 0)
+            if ub < 2:
+                continue               # can never have two on this day
+            rep = m.NewIntVar(0, ub - 1, f"rep[{','.join(key)}]")
+            m.Add(sum(vs) + pin_ssd.get(key, 0) - 1 <= rep)
+            hint_aux(rep, max(0, hint_ssd.get(key, 0) - 1))
+            rep_vars.append(rep)
+        if w.student_subject_repeat:
+            obj += [int(round(w.student_subject_repeat)) * v
+                    for v in rep_vars]
+        if "student_subject_repeat" in caps:
+            m.Add(sum(rep_vars) <= caps["student_subject_repeat"])
+    if w.teacher_idle_gap or "teacher_idle_gap" in caps:
+        # one idle indicator per possible hole period inside a teacher
+        # day: idle >= before + after - busy(hole) - 1, all minimized.
+        # before/after are one-directional ORs of the busy indicators
+        # (>= each member is enough — the objective pushes them down).
+        idle_vars = []
+        td_periods: dict[tuple[str, str], set[int]] = defaultdict(set)
+        for (t, date, p) in by_tdp:
+            td_periods[(t, date)].add(p)
+        for (t, date, p) in pin_tdp:
+            td_periods[(t, date)].add(p)
+        for (t, date) in sorted(td_periods):
+            ps = sorted(td_periods[(t, date)])
+            if ps[-1] - ps[0] < 2:
+                continue               # no room for a hole
+            busy = {}
+            for p in ps:
+                load = (sum(by_tdp.get((t, date, p), []))
+                        + pin_tdp.get((t, date, p), 0))
+                b = m.NewBoolVar(f"tb[{t},{date},{p}]")
+                m.Add(load <= config.teacher_capacity * b)
+                m.Add(b <= load)
+                hint_aux(b, 1 if hint_tdp.get((t, date, p), 0) else 0)
+                busy[p] = b
+            h_busy = {p for p in ps if hint_tdp.get((t, date, p), 0)}
+            for h in range(ps[0] + 1, ps[-1]):
+                lo = [busy[p] for p in ps if p < h]
+                hi = [busy[q] for q in ps if q > h]
+                if not lo or not hi:
+                    continue
+                before = m.NewBoolVar(f"tbef[{t},{date},{h}]")
+                after = m.NewBoolVar(f"taft[{t},{date},{h}]")
+                for v in lo:
+                    m.Add(before >= v)
+                for v in hi:
+                    m.Add(after >= v)
+                h_lo = any(p in h_busy for p in ps if p < h)
+                h_hi = any(q in h_busy for q in ps if q > h)
+                hint_aux(before, 1 if h_lo else 0)
+                hint_aux(after, 1 if h_hi else 0)
+                idle = m.NewBoolVar(f"tidle[{t},{date},{h}]")
+                hole_busy = busy.get(h, 0)
+                m.Add(before + after - hole_busy - 1 <= idle)
+                hint_aux(idle, 1 if (h_lo and h_hi
+                                     and h not in h_busy) else 0)
+                idle_vars.append(idle)
+        if w.teacher_idle_gap:
+            obj += [int(round(w.teacher_idle_gap)) * v for v in idle_vars]
+        if "teacher_idle_gap" in caps:
+            m.Add(sum(idle_vars) <= caps["teacher_idle_gap"])
+    if w.student_subject_spread or "student_subject_spread" in caps:
+        # over-quota sessions per term bucket (scheduler.subject_buckets
+        # defines the buckets; quota = ceil(sessions / buckets)), same
+        # over >= count - quota pattern as the repeat term
+        over_vars = []
+        by_subj_date: dict[tuple[str, str], dict[str, list]] = \
+            defaultdict(lambda: defaultdict(list))
+        for (st, su, date), vs in by_ssd.items():
+            by_subj_date[(st, su)][date].extend(vs)
+        subj_keys = sorted(set(by_subj_date)
+                           | {(st, su) for (st, su, _d) in pin_ssd})
+        for (st, su) in subj_keys:
+            n = data.student_needs.get((st, su), 0)
+            if n < 2:
+                continue
+            buckets = subject_buckets(data, st, n)
+            k = max(buckets.values(), default=0) + 1
+            if k < 2:
+                continue               # a single bucket can never overflow
+            quota = -(-n // k)
+            bucket_vars: dict[int, list] = defaultdict(list)
+            for date, vs in by_subj_date.get((st, su), {}).items():
+                bucket_vars[buckets.get(date, 0)].extend(vs)
+            pin_b: Counter = Counter()
+            hint_b: Counter = Counter()
+            for (pst, psu, pdate), c in pin_ssd.items():
+                if (pst, psu) == (st, su):
+                    pin_b[buckets.get(pdate, 0)] += c
+            for (hst, hsu, hdate), c in hint_ssd.items():
+                if (hst, hsu) == (st, su):
+                    hint_b[buckets.get(hdate, 0)] += c
+            for b in range(k):
+                vs = bucket_vars.get(b, [])
+                ub = min(len(vs), n) + pin_b.get(b, 0)
+                if ub <= quota:
+                    continue           # can never exceed the quota
+                over = m.NewIntVar(0, ub - quota,
+                                   f"sspr[{st},{su},{b}]")
+                m.Add(sum(vs) + pin_b.get(b, 0) - quota <= over)
+                hint_aux(over, max(0, hint_b.get(b, 0) - quota))
+                over_vars.append(over)
+        if w.student_subject_spread:
+            obj += [int(round(w.student_subject_spread)) * v
+                    for v in over_vars]
+        if "student_subject_spread" in caps:
+            m.Add(sum(over_vars) <= caps["student_subject_spread"])
     if w.teacher_working_day:
         obj += [int(round(w.teacher_working_day)) * wd for wd in wd_vars]
     if "teacher_working_day" in caps:

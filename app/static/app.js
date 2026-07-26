@@ -10,6 +10,9 @@ const OBJ_LABELS = {
   teacher_single_day: "Few teacher days with too few lessons",
   teacher_day_spread: "Even working-day counts across teachers",
   slot_penalty: "Avoid penalized timeslots",
+  student_subject_repeat: "Not the same subject twice on one day",
+  teacher_idle_gap: "No idle gaps between a teacher's lessons",
+  student_subject_spread: "Spread each subject's sessions over the term",
 };
 
 const state = { tab: "schedule", keep: false, caution: true,
@@ -1592,7 +1595,10 @@ async function renderSchedule(root) {
         teacher days with ≤${settings.single_day_max}
         lesson${settings.single_day_max > 1 ? "s" : ""}: ${o.teacher_single_days} ·
         day-count spread: ${o.day_spread} ·
-        timeslot penalty points: ${o.slot_penalty ?? 0}</p></div>`);
+        timeslot penalty points: ${o.slot_penalty ?? 0} ·
+        same-subject repeats: ${o.subject_repeats ?? 0} ·
+        teacher idle periods: ${o.teacher_idle ?? 0} ·
+        bunched subject sessions: ${o.subject_bunching ?? 0}</p></div>`);
     status.append(wl);
   }
 

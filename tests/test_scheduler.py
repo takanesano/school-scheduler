@@ -718,7 +718,7 @@ def test_objective_counts_slots_days_and_spreads():
     assert stats["t1"]["days"] == {DATE_OF["Mon"], DATE_OF["Tue"]}
     assert stats["t2"] == {"lessons": 0, "days": set()}
     # t1: 2 lessons/2 days, t2: 0/0 -> spreads 2, total days 2
-    assert schedule_objective(d, lessons) == (0, 0, 0, 2, 2, 2, 2, 0)
+    assert schedule_objective(d, lessons) == (0, 0, 0, 2, 2, 2, 2, 0, 0, 0, 0)
 
 
 def test_teacher_single_days_threshold():
@@ -776,7 +776,7 @@ def test_objective_ignores_ineligible_teachers():
     d.teachers["t9"] = "Ghost"          # no subjects, no availability
     lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
                Lesson("s2", "eng", "t2", "r1", "mon-1", id=2)]
-    assert schedule_objective(d, lessons) == (0, 0, 0, 0, 2, 2, 0, 0)   # t9 not counted
+    assert schedule_objective(d, lessons) == (0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0)   # t9 not counted
 
 
 def test_optimize_packs_teacher_into_fewer_days():
@@ -789,7 +789,7 @@ def test_optimize_packs_teacher_into_fewer_days():
                Lesson("s2", "eng", "t1", "r1", "tue-1")]
     out = optimize_teacher_days(d, lessons)
     assert validate(d, out) == []
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0)
     assert sorted((l.student_id, l.subject_id) for l in out) == \
         [("s1", "math"), ("s2", "eng")]              # coverage untouched
 
@@ -820,7 +820,7 @@ def test_optimize_balances_days_across_teachers():
                               ("s2", "tue-1"), ("s2", "tue-2")}
     out = optimize_teacher_days(d, lessons)
     assert validate(d, out) == []
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0, 0)   # one lesson+day each
+    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0)   # one lesson+day each
     assert {l.teacher_id for l in out} == {"t1", "t2"}
 
 
@@ -836,7 +836,7 @@ def test_optimize_keeps_fixed_lessons_pinned():
     # the movable lesson joins the fixed lesson's day instead
     moved = next(l for l in out if l.student_id == "s2")
     assert d.timeslots[moved.timeslot_id].date == DATE_OF["Tue"]
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0)
 
 
 def test_optimize_rebalances_idle_teacher_even_at_day_cost():
@@ -853,7 +853,7 @@ def test_optimize_rebalances_idle_teacher_even_at_day_cost():
     assert validate(d, out) == []
     counts = sorted((l.teacher_id for l in out))
     assert counts == ["t1", "t2"]                    # one lesson each
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0)
 
 
 def test_optimize_balances_realistic_lopsided_schedule():
@@ -963,6 +963,7 @@ def test_check_input_clean():
     d.student_needs = {("s1", "math"): 2}
     assert check_input_problems(d) == []
 
+
 # ----------------------------------------------------- timeslot penalties
 
 def test_slot_penalty_points_sums_lesson_slots():
@@ -975,8 +976,9 @@ def test_slot_penalty_points_sums_lesson_slots():
                Lesson("s2", "math", "t2", "r1", "mon-2")]   # penalty-free
     assert slot_penalty_points(d, lessons) == 5 + 5 + 2
     assert objective_term_values(d, lessons)["slot_penalty"] == 12
-    # slot_penalty is the LAST element of the default objective tuple
-    assert schedule_objective(d, lessons)[-1] == 12
+    from app.scheduler import OBJECTIVE_TERMS
+    idx = OBJECTIVE_TERMS.index("slot_penalty")
+    assert schedule_objective(d, lessons)[idx] == 12
 
 
 def test_greedy_avoids_penalized_slots():
@@ -1012,3 +1014,88 @@ def test_slot_penalty_objective_cap():
     vs = validate(d, lessons, objective_caps={"slot_penalty": 3})
     assert [v.code for v in vs] == ["objective_cap_exceeded"]
     assert validate(d, lessons, objective_caps={"slot_penalty": 4}) == []
+
+
+# ------------------------- same-subject doubles, idle gaps, subject spread
+
+def test_student_subject_repeats_counts():
+    from app.scheduler import student_subject_repeats
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1"),
+               Lesson("s1", "math", "t2", "r1", "mon-2"),   # repeat on Mon
+               Lesson("s1", "math", "t1", "r1", "tue-1"),
+               Lesson("s2", "eng", "t1", "r1", "mon-1")]
+    assert student_subject_repeats(d, lessons) == 1
+    assert objective_term_values(d, lessons)["student_subject_repeat"] == 1
+
+
+def test_teacher_idle_periods_counts():
+    from app.scheduler import teacher_idle_periods
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1"),
+               Lesson("s2", "math", "t1", "r1", "mon-3"),   # hole at p2
+               Lesson("s1", "eng", "t1", "r1", "tue-1")]    # contiguous day
+    assert teacher_idle_periods(d, lessons) == 1
+    assert objective_term_values(d, lessons)["teacher_idle_gap"] == 1
+
+
+def test_greedy_avoids_same_subject_double_when_possible():
+    """Two math sessions land on different days (and score 0 repeats)."""
+    d = make_data()
+    d.student_needs = {("s1", "math"): 2}
+    r = solve(d)
+    from app.scheduler import student_subject_repeats
+    assert r.complete
+    assert student_subject_repeats(d, r.lessons) == 0
+
+
+def test_greedy_pays_subject_repeat_when_unavoidable():
+    d = make_data(days=("Mon",))                 # one day only
+    d.student_needs = {("s1", "math"): 2}
+    r = solve(d)
+    from app.scheduler import student_subject_repeats
+    assert r.complete
+    assert student_subject_repeats(d, r.lessons) == 1
+
+
+def test_subject_buckets_and_bunching():
+    from app.scheduler import student_subject_bunching, subject_buckets
+    d = make_data(days=("Mon", "Tue", "Wed", "Thu", "Fri", "Sat"))
+    d.student_needs = {("s1", "math"): 3}
+    buckets = subject_buckets(d, "s1", 3)
+    assert [buckets[DATE_OF[x]] for x in
+            ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat")] == [0, 0, 1, 1, 2, 2]
+    bunched = [Lesson("s1", "math", "t1", "r1", "mon-1"),
+               Lesson("s1", "math", "t1", "r1", "tue-1"),
+               Lesson("s1", "math", "t1", "r1", "wed-1")]
+    assert student_subject_bunching(d, bunched) == 1   # two in bucket 0
+    spread = [Lesson("s1", "math", "t1", "r1", "mon-1"),
+              Lesson("s1", "math", "t1", "r1", "wed-1"),
+              Lesson("s1", "math", "t1", "r1", "fri-1")]
+    assert student_subject_bunching(d, spread) == 0
+
+
+def test_greedy_spreads_subject_over_the_term():
+    """The reported case: 3 sessions over a long term must NOT all land
+    in the first available days."""
+    from app.scheduler import student_subject_bunching
+    d = make_data(days=("Mon", "Tue", "Wed", "Thu", "Fri", "Sat"))
+    d.student_needs = {("s1", "eng"): 3}
+    r = solve(d)
+    assert r.complete and r.nodes_explored == 0
+    dates = sorted(d.timeslots[l.timeslot_id].date for l in r.lessons)
+    assert student_subject_bunching(d, r.lessons) == 0
+    assert dates != [DATE_OF["Mon"], DATE_OF["Tue"], DATE_OF["Wed"]]
+
+
+def test_new_terms_are_cappable():
+    d = make_data(days=("Mon",))
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+               Lesson("s1", "math", "t1", "r1", "mon-2", id=2)]
+    vs = validate(d, lessons, objective_caps={"student_subject_repeat": 0})
+    assert codes(vs) == ["objective_cap_exceeded"]
+    gap = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+           Lesson("s2", "math", "t1", "r1", "mon-3", id=2)]
+    vs = validate(d, gap, objective_caps={"teacher_idle_gap": 0})
+    assert codes(vs) == ["objective_cap_exceeded"]
+    assert validate(d, gap, objective_caps={"teacher_idle_gap": 1}) == []
