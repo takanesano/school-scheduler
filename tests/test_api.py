@@ -595,6 +595,64 @@ def test_any_condition_can_be_always_active(client, term, value):
     assert client.get("/api/schedule").json()["violations"] == []
 
 
+def test_undo_grid_edits_in_reverse_order(client):
+    """Availability edits join the same undo stack, stored as inverse
+    deltas: a bulk block edit and a later single toggle are undone in
+    reverse order, without touching unrelated cells."""
+    seed_world(client)
+    client.post("/api/student_availability/bulk", json={
+        "add": [], "remove": [["s1", "mon-1"], ["s1", "mon-2"],
+                              ["s2", "mon-1"], ["s2", "mon-2"]]})
+    client.delete(
+        "/api/student_availability?student_id=s2&timeslot_id=tue-1")
+    assert client.get("/api/undo").json()["label"] == \
+        "availability change"
+
+    def on():
+        return {(a["student_id"], a["timeslot_id"]) for a in
+                client.get("/api/student_availability").json()}
+
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "availability change"
+    now = on()
+    assert ("s2", "tue-1") in now          # single toggle reverted
+    assert ("s1", "mon-1") not in now      # block edit still applied
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "availability block edit"
+    now = on()
+    assert {("s1", "mon-1"), ("s1", "mon-2"),
+            ("s2", "mon-1"), ("s2", "mon-2")} <= now
+
+    # a no-op (adding an already-available cell) pushes nothing
+    n = client.get("/api/undo").json()["count"]
+    client.post("/api/student_availability",
+                json={"student_id": "s1", "timeslot_id": "mon-1"})
+    assert client.get("/api/undo").json()["count"] == n
+
+
+def test_undo_assignment_edits_restores_priorities(client):
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_students", json={
+        "teacher_id": "t1", "student_id": "s1", "priority": 2})
+    client.post("/api/teacher_students/bulk", json={
+        "set": [["t1", "s1", 0], ["t2", "s2", 1]], "clear": []})
+
+    def pairs():
+        return {(p["teacher_id"], p["student_id"]): p["priority"]
+                for p in client.get("/api/teacher_students").json()}
+
+    assert pairs() == {("t1", "s1"): 0, ("t2", "s2"): 1}
+    # undo the bulk: t1-s1 back to its PRIOR priority 2, t2-s2 gone
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "assignment block edit"
+    assert pairs() == {("t1", "s1"): 2}
+    # undo the single add
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "assignment change"
+    assert pairs() == {}
+
+
 def test_bulk_availability_set_and_clear(client):
     """One transaction flips a whole rectangle of availability cells
     (used by area select / paste in the Availability tab)."""
@@ -865,7 +923,7 @@ def test_undo_reverts_manual_edits_in_order(client):
     assert snap() == set()
 
     undo = client.get("/api/schedule").json()["undo"]
-    assert undo["count"] == 4 and undo["label"] == "delete lesson"
+    assert undo["count"] >= 4 and undo["label"] == "delete lesson"
     assert client.post("/api/schedule/undo").json()["undid"] == \
         "delete lesson"
     assert snap() == {(lid, "t2", "tue-1")}
@@ -878,7 +936,9 @@ def test_undo_reverts_manual_edits_in_order(client):
     assert client.post("/api/schedule/undo").json()["undid"] == \
         "add lesson"
     assert snap() == set()
-    assert client.post("/api/schedule/undo").status_code == 404
+    # below the lesson edits sit the seeding's availability entries
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "availability change"
 
 
 def test_undo_covers_repeat_and_preserves_locks(client):
@@ -898,12 +958,13 @@ def test_undo_covers_repeat_and_preserves_locks(client):
 
 def test_generate_and_clear_reset_undo_history(client):
     seed_world(client)
+    base = client.get("/api/undo").json()["count"]
     client.post("/api/student_needs", json={
         "student_id": "s1", "subject_id": "math", "sessions": 1})
     client.post("/api/lessons", json={
         "student_id": "s2", "subject_id": "math", "teacher_id": "t1",
         "room_id": "r1", "timeslot_id": "mon-2"})
-    assert client.get("/api/schedule").json()["undo"]["count"] == 1
+    assert client.get("/api/schedule").json()["undo"]["count"] == base + 1
     client.post("/api/schedule/generate", json={})
     assert client.get("/api/schedule").json()["undo"]["count"] == 0
     assert client.post("/api/schedule/undo").status_code == 404
@@ -924,12 +985,13 @@ def test_undo_with_vanished_references_fails_cleanly(client):
         "room_id": "r1", "timeslot_id": "mon-1"})
     client.patch("/api/lessons/1", json={"timeslot_id": "mon-2"})
     client.delete("/api/students/s1")      # cascades the lesson away
+    before = client.get("/api/undo").json()["count"]
     r = client.post("/api/schedule/undo")  # snapshot references s1
     assert r.status_code == 409
     assert "changed" in r.json()["detail"]
     # the stale entry is gone; the next one may fail the same way but
     # the stack never gets stuck
-    assert client.get("/api/schedule").json()["undo"]["count"] == 1
+    assert client.get("/api/undo").json()["count"] == before - 1
 
 
 def test_bulk_update_changes_selected_lessons(client):
