@@ -338,6 +338,9 @@ td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
               display: block; }
 .cal-entry { border-left: 3px solid var(--accent); padding: 0.1rem 0.35rem;
              margin: 0.15rem 0; font-size: 0.8rem; overflow-wrap: break-word; }
+.tcolor-dot { display: inline-block; width: 0.6rem; height: 0.6rem;
+              border-radius: 50%; margin-right: 0.35rem;
+              vertical-align: baseline; }
 .cal-line { margin-top: 0.1rem; }
 @media print {
   header, .no-print, #toast { display: none !important; }

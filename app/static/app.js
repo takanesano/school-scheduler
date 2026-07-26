@@ -38,6 +38,15 @@ const TABS = [
 
 // ------------------------------------------------------------------ helpers
 
+// A stable, distinct color per teacher, derived from the id: the hash
+// is spread by the golden angle so even sequential ids (t01, t02, …)
+// land far apart on the hue wheel.
+function teacherColor(id) {
+  let h = 0;
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `hsl(${Math.round((h * 137.508) % 360)}, 62%, 42%)`;
+}
+
 // Big people × slots grids: scroll inside the box with STICKY headers
 // (top row(s) and the name column stay visible), plus a hover
 // cross-highlight so a cell is easy to trace to its row and column.
@@ -1383,7 +1392,9 @@ async function renderSchedule(root) {
       <table><thead><tr><th>Teacher</th><th>Lessons</th>
         <th>Working days</th></tr></thead><tbody>${
         schedule.teacher_stats.map(t =>
-          `<tr><td><button class="person-link" data-kind="teacher"
+          `<tr><td><span class="tcolor-dot"
+             style="background:${teacherColor(t.teacher_id)}"></span><button
+             class="person-link" data-kind="teacher"
              data-pid="${esc(t.teacher_id)}" title="show in the timetable
              filter">${esc(t.name)}</button></td><td>${t.lessons}</td>
            <td>${t.days}</td></tr>`).join("")
@@ -1936,7 +1947,8 @@ async function renderSchedule(root) {
     const lockedIds = new Set(
       schedule.lessons.filter(l => l.locked).map(l => l.id));
     grid.append(calendarTable(overview, (entry) => {
-      const box = el(`<div class="cal-entry" data-teacher-id="${entry.teacher_id}">
+      const box = el(`<div class="cal-entry" data-teacher-id="${entry.teacher_id}"
+        style="border-left-color:${teacherColor(entry.teacher_id)}">
         <b>${esc(entry.teacher_name)}</b></div>`);
       for (const l of entry.lessons) {
         const locked = lockedIds.has(l.lesson_id);
@@ -2039,17 +2051,23 @@ const CAL_VIEWS = [
 
 function calEntryHtml(entry, view) {
   if (view === "overview") {
-    return el(`<div class="cal-entry"><b>${esc(entry.teacher_name)}</b>${
+    return el(`<div class="cal-entry"
+      style="border-left-color:${teacherColor(entry.teacher_id)}">
+      <b>${esc(entry.teacher_name)}</b>${
       entry.lessons.map(l =>
         `<div class="cal-line">${esc(l.student_name)} — ${esc(l.subject_name)}
          <span class="muted">(${esc(l.room_name)})</span></div>`).join("")
     }</div>`);
   }
   if (view === "student") {
-    return el(`<div class="cal-entry"><b>${esc(entry.subject_name)}</b>
+    return el(`<div class="cal-entry"
+      style="border-left-color:${teacherColor(entry.teacher_id)}">
+      <b>${esc(entry.subject_name)}</b>
       <div class="cal-line muted">${esc(entry.teacher_name)} · ${esc(entry.room_name)}</div></div>`);
   }
-  return el(`<div class="cal-entry"><b>${esc(entry.subject_name)}</b>
+  return el(`<div class="cal-entry"
+    style="border-left-color:${teacherColor(state.calPerson)}">
+    <b>${esc(entry.subject_name)}</b>
     <div class="cal-line">${esc(entry.student_name)}
       <span class="muted">· ${esc(entry.room_name)}</span></div></div>`);
 }
