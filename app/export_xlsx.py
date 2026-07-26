@@ -74,14 +74,20 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
     ws.title = "時間割 全体表"
 
     days, periods, label_of = _days_periods_labels(view)
-    n_sub = max((len(s["entries"]) for d in days for s in d["slots"]),
-                default=1) or 1
-    # sub-rows per teacher block: 2 by design (one student per row,
-    # capacity 2), stretched only if some teacher ever has more
+    # sub-rows per teacher lane: 2 by design (one student per row,
+    # capacity 2), stretched only if some teacher ever has more. Every
+    # teacher working a day owns ONE lane across all its periods.
     rows_per = max([2] + [len(t["lessons"])
                           for d in days for s in d["slots"]
                           for t in s["entries"]])
-    day_rows = n_sub * rows_per
+
+    def day_teachers(day: dict) -> list[tuple[str, str]]:
+        seen: dict[str, str] = {}
+        for s in day["slots"]:
+            for t in s["entries"]:
+                seen.setdefault(t.get("teacher_id", t["teacher_name"]),
+                                t["teacher_name"])
+        return sorted(seen.items())
 
     # ---- header row: 日付 | ① 09:00-10:10 (merged over 2 cols) | …
     ws.cell(row=1, column=1, value="日付")
@@ -95,9 +101,14 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
                        end_row=1, end_column=c0 + 1)
         _header_cell(ws.cell(row=1, column=c0, value=head))
 
-    # ---- one block of day_rows rows per day (rows_per per teacher)
+    # ---- one block of rows per day: one lane (rows_per rows) per
+    # working teacher, blank in periods the teacher is off
     r = 2
+    day_spans: list[tuple[int, int]] = []      # (first row, last row)
     for day in days:
+        lanes = day_teachers(day)
+        day_rows = max(1, len(lanes)) * rows_per
+        day_spans.append((r, r + day_rows - 1))
         d = dt.date.fromisoformat(day["date"])
         wd = day["weekday"]
         ws.merge_cells(start_row=r, start_column=1,
@@ -114,6 +125,8 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
         for i, p in enumerate(periods):
             c0 = 2 + i * 2
             slot = slots.get(p)
+            here = ({t.get("teacher_id", t["teacher_name"]): t
+                     for t in slot["entries"]} if slot else {})
             for row in range(day_rows):
                 tcell = ws.cell(row=r + row, column=c0)
                 scell = ws.cell(row=r + row, column=c0 + 1)
@@ -121,14 +134,13 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
                     tcell.fill = GREY
                     scell.fill = GREY
                     continue
-                k, j = divmod(row, rows_per)   # teacher block, sub-row
-                if k < len(slot["entries"]):
-                    t = slot["entries"][k]
-                    fill = _teacher_fill(
-                        t.get("teacher_id", t["teacher_name"]))
+                k, j = divmod(row, rows_per)   # teacher lane, sub-row
+                t = here.get(lanes[k][0]) if k < len(lanes) else None
+                if t is not None:
+                    fill = _teacher_fill(lanes[k][0])
                     tcell.fill = fill
                     scell.fill = fill
-                    # the teacher's name on EVERY row of their block,
+                    # the teacher's name on EVERY row of their lane,
                     # ONE student per row (second row empty when the
                     # teacher has a single student)
                     tcell.value = t["teacher_name"]
@@ -138,9 +150,11 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
 
     # ---- borders: thin inside a day×period cell, medium around it
     last_row = r - 1
+    span_of = {row: span for span in day_spans
+               for row in range(span[0], span[1] + 1)}
     for row in range(2, last_row + 1):
-        block_top = (row - 2) % day_rows == 0
-        block_bottom = (row - 2) % day_rows == day_rows - 1
+        block_top = span_of[row][0] == row
+        block_bottom = span_of[row][1] == row
         ws.cell(row=row, column=1).border = Border(
             left=MEDIUM, right=MEDIUM,
             top=MEDIUM if block_top else THIN,

@@ -254,11 +254,12 @@ def _truncated(pdf: FPDF, text: str, width: float) -> str:
     return text + "…"
 
 
-# transposed master table: one ROW per day, one COLUMN per period; each
-# day×period cell is a fixed stack of teacher BLOCKS of two sub-rows —
-# the teacher's name on both, ONE student per sub-row (the second stays
-# empty when the teacher has a single student), the whole block tinted
-# with the teacher's UI color. Subjects and rooms are not shown.
+# transposed master table: one ROW per day, one COLUMN per period. A
+# day row is divided into teacher LANES — every teacher working that
+# day owns ONE two-sub-row band across ALL the day's periods (name on
+# both rows, ONE student per sub-row, second row empty for a single
+# student; the band stays blank in periods the teacher is off). Bands
+# are tinted with the teacher's UI color. Subjects/rooms not shown.
 DATE_COL_W = 21.0
 SUB_H = 3.0              # height of one student sub-row (mm)
 NAME_FRAC = 0.34         # teacher-name part of a period cell
@@ -276,15 +277,22 @@ def overview_pdf(view: dict, generated_at: str) -> bytes:
         pdf.cell(GRID_W, 5, "時間割はまだありません")
         return bytes(pdf.output())
 
-    # every cell gets the same number of teacher blocks (the busiest
-    # slot of the term decides), so day rows line up uniformly; each
-    # block is `rows_per` sub-rows — 2 by design (one student per row,
-    # capacity 2), stretched only if some teacher ever has more
-    n_sub = max((len(s["entries"]) for d in days for s in d["slots"]),
-                default=1) or 1
+    # each teacher lane is `rows_per` sub-rows — 2 by design (one
+    # student per row, capacity 2), stretched only if some teacher ever
+    # has more; a day's height = its number of working teachers
     rows_per = max([2] + [len(t["lessons"])
                           for d in days for s in d["slots"]
                           for t in s["entries"]])
+
+    def day_teachers(day: dict) -> list[tuple[str, str]]:
+        """(id, name) of every teacher working that day, sorted by id —
+        each owns one lane across all of the day's periods."""
+        seen: dict[str, str] = {}
+        for s in day["slots"]:
+            for t in s["entries"]:
+                seen.setdefault(t.get("teacher_id", t["teacher_name"]),
+                                t["teacher_name"])
+        return sorted(seen.items())
     # a representative time label per period (first seen)
     label_of: dict[int, str] = {}
     for d in days:
@@ -295,7 +303,6 @@ def overview_pdf(view: dict, generated_at: str) -> bytes:
     per_w = (GRID_W - DATE_COL_W) / len(periods)
     name_w = per_w * NAME_FRAC
     block_h = rows_per * SUB_H
-    row_h = n_sub * block_h
     top = MARGIN + HEADER_H
     bottom = PAGE_H - FOOTER_H - 2.0
 
@@ -317,6 +324,8 @@ def overview_pdf(view: dict, generated_at: str) -> bytes:
     pdf.add_page()
     y = table_header(top)
     for day in days:
+        lanes = day_teachers(day)
+        row_h = max(1, len(lanes)) * block_h
         if y + row_h > bottom:
             pdf.add_page()
             y = table_header(top)
@@ -344,32 +353,37 @@ def overview_pdf(view: dict, generated_at: str) -> bytes:
                 pdf.rect(x, y, per_w, row_h, style="DF")
                 continue
             pdf.rect(x, y, per_w, row_h)
-            # teacher blocks: tinted background first, then separators
-            for k, t in enumerate(slot["entries"][:n_sub]):
-                by = y + k * block_h
-                pdf.set_fill_color(*teacher_fill_rgb(
-                    t.get("teacher_id", t["teacher_name"])))
-                pdf.rect(x + 0.1, by + 0.1,
-                         per_w - 0.2, block_h - 0.2, style="F")
+            # this slot's entries by teacher id — placed into the
+            # day-wide lane of that teacher, blank where they are off
+            here = {t.get("teacher_id", t["teacher_name"]): t
+                    for t in slot["entries"]}
+            for k, (tid, _tname) in enumerate(lanes):
+                if tid in here:
+                    by = y + k * block_h
+                    pdf.set_fill_color(*teacher_fill_rgb(tid))
+                    pdf.rect(x + 0.1, by + 0.1,
+                             per_w - 0.2, block_h - 0.2, style="F")
             # light separators: one per student sub-row, plus the
             # name|student split
             pdf.set_draw_color(200)
-            for k in range(1, n_sub * rows_per):
+            for k in range(1, max(1, len(lanes)) * rows_per):
                 pdf.line(x, y + k * SUB_H, x + per_w, y + k * SUB_H)
             pdf.line(x + name_w, y, x + name_w, y + row_h)
             pdf.set_draw_color(0)
-            for k, t in enumerate(slot["entries"][:n_sub]):
-                name = t["teacher_name"]
+            for k, (tid, tname) in enumerate(lanes):
+                t = here.get(tid)
+                if t is None:
+                    continue               # teacher off this period
                 pupils = [l["student_name"] for l in t["lessons"]]
                 for j in range(rows_per):
                     sy = y + k * block_h + j * SUB_H
                     # the teacher's name on EVERY row of their block
                     pdf.set_text_color(0)
-                    size = _fit_text(pdf, name, name_w - 1.2, SIZE_BODY)
+                    size = _fit_text(pdf, tname, name_w - 1.2, SIZE_BODY)
                     pdf.set_font("noto", size=size)
                     pdf.set_xy(x + 0.6, sy)
                     pdf.cell(name_w - 1.2, SUB_H,
-                             _truncated(pdf, name, name_w - 1.2))
+                             _truncated(pdf, tname, name_w - 1.2))
                     if j < len(pupils):        # one student per row
                         pupil = pupils[j]
                         size = _fit_text(pdf, pupil,

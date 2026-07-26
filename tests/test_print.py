@@ -241,3 +241,30 @@ def test_print_all_students_has_page_per_student(client):
     client.post("/api/students", json={"id": "s2", "name": "Ren"})
     r = client.get("/api/print/students.pdf")
     assert page_count(r.content) == 2
+
+
+def test_overview_xlsx_teacher_lanes_are_day_wide():
+    """A teacher owns ONE lane across all of the day's periods: in
+    periods they are off, their lane stays blank (no name, no fill)."""
+    import io
+
+    from openpyxl import load_workbook
+
+    from app.export_xlsx import overview_xlsx
+    d = make_data()
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
+               Lesson("s2", "eng", "t2", "r1", "mon-2", id=2)]
+    out = overview_xlsx(build_overview(d, lessons), STAMP)
+    ws = load_workbook(io.BytesIO(out)).active
+    # Monday lanes: t1 = rows 2-3, t2 = rows 4-5 (sorted by id)
+    # P1 (cols 2-3): t1 teaching, t2 lane blank
+    assert ws.cell(row=2, column=2).value == "田中"
+    assert ws.cell(row=2, column=3).value == "葵"
+    assert ws.cell(row=4, column=2).value is None
+    assert ws.cell(row=4, column=3).value is None
+    # P2 (cols 4-5): t1 lane blank, t2 teaching in ITS OWN lane
+    assert ws.cell(row=2, column=4).value is None
+    assert ws.cell(row=4, column=4).value == "鈴木"
+    assert ws.cell(row=4, column=5).value == "蓮"
+    # blank lane cells carry no teacher fill
+    assert ws.cell(row=2, column=4).fill.fgColor.rgb in (None, "00000000")
