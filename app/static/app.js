@@ -633,40 +633,68 @@ async function renderNeeds(root) {
   const subname = Object.fromEntries(subjects.map(s => [s.id, s.name]));
   const tname = Object.fromEntries(teachers.map(t => [t.id, t.name]));
 
-  const needsPanel = el(`<div class="panel"><h2>Student needs (total sessions over the term)</h2>
-    <div class="row">
-      <select id="n-student">${students.map(s =>
-        `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.id)})</option>`).join("")}</select>
-      <select id="n-subject">${subjects.map(s =>
-        `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.id)})</option>`).join("")}</select>
-      <input id="n-count" type="number" min="1" value="1" style="width:6rem">
-      <button class="action" id="add">Set need</button>
-    </div>
-    <table><thead><tr><th>Student</th><th>Subject</th><th>Sessions</th><th></th></tr></thead>
-    <tbody></tbody></table></div>`);
+  // editable matrix: one number input per (student, subject), saved on
+  // change — blank or 0 removes the need
+  const needMap = new Map(
+    needs.map(n => [`${n.student_id}|${n.subject_id}`, n.sessions]));
+  const needsPanel = el(`<div class="panel">
+    <h2>Student needs (total sessions over the term)</h2>
+    <p class="muted">Type the number of sessions for each student and
+      subject — changes save immediately; blank or 0 removes the
+      need.</p>
+    <div class="grid-scroll"><table class="grid-table"><thead><tr>
+      <th></th>${subjects.map(s =>
+        `<th>${esc(s.name)}</th>`).join("")}<th>total</th></tr></thead>
+    <tbody></tbody></table></div></div>`);
   const tbody = $("tbody", needsPanel);
-  for (const n of needs) {
-    const tr = el(`<tr><td>${esc(sname[n.student_id] || n.student_id)}</td>
-      <td>${esc(subname[n.subject_id] || n.subject_id)}</td>
-      <td>${n.sessions}</td><td><button class="small">delete</button></td></tr>`);
-    $("button", tr).onclick = async () => {
-      await api("DELETE",
-        `/api/student_needs?student_id=${encodeURIComponent(n.student_id)}&subject_id=${encodeURIComponent(n.subject_id)}`)
-        .catch(e => toast(e.message, true));
-      render();
+  for (const st of students) {
+    const tr = document.createElement("tr");
+    tr.append(el(`<th>${esc(st.name)} (${esc(st.id)})</th>`));
+    const totalTd = el(`<td class="need-total"></td>`);
+    const updateTotal = () => {
+      let sum = 0;
+      for (const su of subjects) {
+        sum += needMap.get(`${st.id}|${su.id}`) || 0;
+      }
+      totalTd.textContent = sum || "·";
     };
+    for (const su of subjects) {
+      const key = `${st.id}|${su.id}`;
+      const cur = needMap.get(key);
+      const td = el(`<td class="need-cell"><input type="number" min="0"
+        max="99" class="inline-num" value="${cur ?? ""}"></td>`);
+      const input = $("input", td);
+      input.onchange = async () => {
+        const v = parseInt(input.value, 10);
+        const had = needMap.has(key);
+        try {
+          if (v >= 1) {
+            await api("POST", "/api/student_needs", {
+              student_id: st.id, subject_id: su.id, sessions: v });
+            needMap.set(key, v);
+            input.value = v;
+          } else if (had) {
+            await api("DELETE",
+              `/api/student_needs?student_id=${encodeURIComponent(st.id)}`
+              + `&subject_id=${encodeURIComponent(su.id)}`);
+            needMap.delete(key);
+            input.value = "";
+          } else {
+            input.value = "";
+          }
+          updateTotal();
+        } catch (e) {
+          toast(e.message, true);
+          render();
+        }
+      };
+      tr.append(td);
+    }
+    tr.append(totalTd);
+    updateTotal();
     tbody.append(tr);
   }
-  $("#add", needsPanel).onclick = async () => {
-    try {
-      await api("POST", "/api/student_needs", {
-        student_id: $("#n-student", needsPanel).value,
-        subject_id: $("#n-subject", needsPanel).value,
-        sessions: parseInt($("#n-count", needsPanel).value, 10),
-      });
-      render();
-    } catch (e) { toast(e.message, true); }
-  };
+  enhanceGrid($(".grid-scroll", needsPanel));
   root.append(needsPanel);
 
   const tsPanel = el(`<div class="panel"><h2>Teacher subjects (who can teach what)</h2>
