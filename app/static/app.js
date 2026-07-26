@@ -1514,6 +1514,7 @@ async function renderSchedule(root) {
       }</button>
       ${state.selectMode || nSel ? `
         <span id="sel-count"${nSel ? "" : ' class="muted"'}>${nSel} selected</span>
+        <button class="action secondary" id="sel-all">Select all</button>
         <label class="gen-inline">repeat over the next
           <input type="number" id="rep-weeks" min="1" max="12"
             value="${state.repeatWeeks}" style="width:4rem"> week(s)</label>
@@ -1531,6 +1532,7 @@ async function renderSchedule(root) {
       <select id="bulk-room"><option value="">(keep room)</option>
         ${opt(rooms, r => r.name)}</select>
       <button class="action" id="bulk-go"${nSel ? "" : " disabled"}>Apply</button>
+      <button class="action secondary" id="lock-sel"${nSel ? "" : " disabled"}></button>
     </div>` : ""}</div>`);
   $("#undo-btn", grid).onclick = async () => {
     try {
@@ -1550,8 +1552,11 @@ async function renderSchedule(root) {
   if (selClear) {
     selClear.onclick = () => { state.selectedLessons.clear(); render(); };
   }
+  const lockedIds = new Set(
+    schedule.lessons.filter(l => l.locked).map(l => l.id));
   const repGo = $("#rep-go", grid);
   const bulkGo = $("#bulk-go", grid);
+  const lockSel = $("#lock-sel", grid);
   const selCount = $("#sel-count", grid);
   const updateSelBar = () => {
     const n = state.selectedLessons.size;
@@ -1562,7 +1567,41 @@ async function renderSchedule(root) {
     if (repGo) repGo.disabled = !n;
     if (bulkGo) bulkGo.disabled = !n;
     if (selClear) selClear.disabled = !n;
+    if (lockSel) {
+      lockSel.disabled = !n;
+      const allLocked = n > 0 &&
+        [...state.selectedLessons].every(id => lockedIds.has(id));
+      lockSel.textContent = allLocked
+        ? "🔓 Unlock selected" : "🔒 Lock selected";
+      lockSel.dataset.locking = allLocked ? "" : "1";
+    }
   };
+  const selAll = $("#sel-all", grid);
+  if (selAll) {
+    selAll.onclick = () => {
+      for (const c of grid.querySelectorAll(
+        ".lesson-card[data-lesson-id]")) {
+        if (c.closest(".filter-hidden")) continue;   // respect the filter
+        state.selectedLessons.add(+c.dataset.lessonId);
+        c.classList.add("selected");
+      }
+      updateSelBar();
+    };
+  }
+  updateSelBar();
+  if (lockSel) {
+    lockSel.onclick = async () => {
+      const ids = [...state.selectedLessons];
+      if (!ids.length) return;
+      const locking = !!lockSel.dataset.locking;
+      try {
+        const res = await api("POST", "/api/lessons/bulk_lock",
+          { lesson_ids: ids, locked: locking });
+        toast(`${locking ? "Locked" : "Unlocked"} ${res.count} lesson(s)`);
+      } catch (e) { toast(e.message, true); }
+      render();
+    };
+  }
   if (bulkGo) {
     bulkGo.onclick = async () => {
       const body = { lesson_ids: [...state.selectedLessons] };
@@ -1944,8 +1983,6 @@ async function renderSchedule(root) {
       refresh();
     }
 
-    const lockedIds = new Set(
-      schedule.lessons.filter(l => l.locked).map(l => l.id));
     grid.append(calendarTable(overview, (entry) => {
       const box = el(`<div class="cal-entry" data-teacher-id="${entry.teacher_id}"
         style="border-left-color:${teacherColor(entry.teacher_id)}">

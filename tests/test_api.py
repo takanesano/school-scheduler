@@ -1086,6 +1086,41 @@ def test_bulk_update_validates_input(client):
                        ).status_code == 404
 
 
+def test_bulk_lock_and_repeat_inherits_lock(client):
+    """bulk_lock flips several lessons in one call, and repeat copies
+    now inherit the source's lock status."""
+    seed_two_weeks(client)
+    ids = []
+    for st, slot in (("s1", "mon-1"), ("s2", "mon-2")):
+        ids.append(client.post("/api/lessons", json={
+            "student_id": st, "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1", "timeslot_id": slot}).json()["id"])
+    r = client.post("/api/lessons/bulk_lock",
+                    json={"lesson_ids": ids, "locked": True})
+    assert r.status_code == 200 and r.json()["count"] == 2
+    flags = {l["id"]: l["locked"] for l in
+             client.get("/api/schedule").json()["lessons"]}
+    assert all(flags[i] for i in ids)
+    assert client.post("/api/lessons/bulk_lock",
+                       json={"lesson_ids": [999], "locked": True}
+                       ).status_code == 404
+
+    # repeat: the locked sources produce locked copies
+    r = client.post("/api/lessons/repeat",
+                    json={"lesson_ids": ids, "weeks": 1})
+    assert r.json()["created"] == 2
+    lessons = client.get("/api/schedule").json()["lessons"]
+    copies = [l for l in lessons if l["id"] not in ids]
+    assert len(copies) == 2 and all(l["locked"] for l in copies)
+
+    # unlock everything again in one call
+    all_ids = [l["id"] for l in lessons]
+    client.post("/api/lessons/bulk_lock",
+                json={"lesson_ids": all_ids, "locked": False})
+    assert not any(l["locked"] for l in
+                   client.get("/api/schedule").json()["lessons"])
+
+
 def test_repeat_validates_input(client):
     seed_world(client)
     assert client.post("/api/lessons/repeat",
