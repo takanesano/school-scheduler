@@ -99,22 +99,23 @@ def test_overview_xlsx_structure():
     assert ws.cell(row=1, column=1).value == "日付"
     assert ws.cell(row=1, column=2).value.startswith("①")
     # Monday block: two teachers in P1 (t1+t2), each holding TWO rows —
-    # teacher name on both, one student per row, second row empty
+    # STUDENT on the left, teacher name on the right of both rows,
+    # one student per row, second row empty
     assert ws.cell(row=2, column=1).value == "7/27(月)"
-    p1 = [(ws.cell(row=r, column=2).value,
-           ws.cell(row=r, column=3).value or "")
+    p1 = [(ws.cell(row=r, column=2).value or "",
+           ws.cell(row=r, column=3).value)
           for r in (2, 3, 4, 5)]
-    assert sorted(p1) == [("田中", ""), ("田中", "葵"),
-                          ("鈴木", ""), ("鈴木", "蓮")]
+    assert sorted(p1) == [("", "田中"), ("", "鈴木"),
+                          ("葵", "田中"), ("蓮", "鈴木")]
     # both rows of a teacher's block share that teacher's color fill
     from app.print_pdf import teacher_fill_rgb
     for r in (2, 3, 4, 5):
-        tid = "t1" if ws.cell(row=r, column=2).value == "田中" else "t2"
+        tid = "t1" if ws.cell(row=r, column=3).value == "田中" else "t2"
         rr, gg, bb = teacher_fill_rgb(tid)
-        assert ws.cell(row=r, column=2).fill.fgColor.rgb == \
-            f"00{rr:02X}{gg:02X}{bb:02X}"
         assert ws.cell(row=r, column=3).fill.fgColor.rgb == \
-            ws.cell(row=r, column=2).fill.fgColor.rgb
+            f"00{rr:02X}{gg:02X}{bb:02X}"
+        assert ws.cell(row=r, column=2).fill.fgColor.rgb == \
+            ws.cell(row=r, column=3).fill.fgColor.rgb
     # 2 teachers x 2 rows -> Wednesday block starts at row 6; merged date
     assert ws.cell(row=6, column=1).value == "7/29(水)"
     assert str(ws.merged_cells.ranges).count("A") >= 1
@@ -257,14 +258,14 @@ def test_overview_xlsx_teacher_lanes_are_day_wide():
     out = overview_xlsx(build_overview(d, lessons), STAMP)
     ws = load_workbook(io.BytesIO(out)).active
     # Monday lanes: t1 = rows 2-3, t2 = rows 4-5 (sorted by id)
-    # P1 (cols 2-3): t1 teaching, t2 lane blank
-    assert ws.cell(row=2, column=2).value == "田中"
-    assert ws.cell(row=2, column=3).value == "葵"
+    # P1 (cols 2-3, student|teacher): t1 teaching, t2 lane blank
+    assert ws.cell(row=2, column=2).value == "葵"
+    assert ws.cell(row=2, column=3).value == "田中"
     assert ws.cell(row=4, column=2).value is None
     assert ws.cell(row=4, column=3).value is None
     # P2 (cols 4-5): t1 lane blank, t2 teaching in ITS OWN lane
     assert ws.cell(row=2, column=4).value is None
-    assert ws.cell(row=4, column=4).value == "鈴木"
-    assert ws.cell(row=4, column=5).value == "蓮"
+    assert ws.cell(row=4, column=4).value == "蓮"
+    assert ws.cell(row=4, column=5).value == "鈴木"
     # blank lane cells carry no teacher fill
     assert ws.cell(row=2, column=4).fill.fgColor.rgb in (None, "00000000")

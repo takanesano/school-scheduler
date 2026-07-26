@@ -2,10 +2,12 @@
 
 Same layout as the PDF overview handout (`print_pdf.overview_pdf`):
 one block of rows per in-term day, one column pair per period
-(teacher | student), each teacher holding TWO sub-rows — one student
-per row, the second left empty for a single student — tinted with the
-teacher's UI color. Pure module: consumes the views.py week-grid shape
-plus metadata and returns the workbook bytes — no DB, no FastAPI.
+(student | teacher), each teacher holding a TWO sub-row lane across
+the whole day — one student per row, the second left empty for a
+single student — tinted with the teacher's UI color; a page break
+after every week mirrors the PDF's week-per-page. Pure module:
+consumes the views.py week-grid shape plus metadata and returns the
+workbook bytes — no DB, no FastAPI.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import io
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.pagebreak import Break
 
 from .print_pdf import WEEKDAY_JA, _circled, teacher_fill_rgb, term_label
 
@@ -74,6 +77,10 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
     ws.title = "時間割 全体表"
 
     days, periods, label_of = _days_periods_labels(view)
+    # week index of each in-term day, for the per-week print breaks
+    week_of: list[int] = []
+    for wi, w in enumerate(view["weeks"]):
+        week_of += [wi] * sum(1 for c in w if c["in_term"])
     # sub-rows per teacher lane: 2 by design (one student per row,
     # capacity 2), stretched only if some teacher ever has more. Every
     # teacher working a day owns ONE lane across all its periods.
@@ -128,8 +135,8 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
             here = ({t.get("teacher_id", t["teacher_name"]): t
                      for t in slot["entries"]} if slot else {})
             for row in range(day_rows):
-                tcell = ws.cell(row=r + row, column=c0)
-                scell = ws.cell(row=r + row, column=c0 + 1)
+                scell = ws.cell(row=r + row, column=c0)
+                tcell = ws.cell(row=r + row, column=c0 + 1)
                 if slot is None:
                     tcell.fill = GREY
                     scell.fill = GREY
@@ -173,11 +180,16 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
         ws.cell(row=1, column=col).border = Border(
             left=MEDIUM, right=MEDIUM, top=MEDIUM, bottom=MEDIUM)
 
+    # ---- one week per printed page (mirrors the PDF handout)
+    for di in range(len(days) - 1):
+        if week_of[di] != week_of[di + 1]:
+            ws.row_breaks.append(Break(id=day_spans[di][1]))
+
     # ---- column widths, freeze panes, print setup
     ws.column_dimensions["A"].width = 10
     for i in range(len(periods)):
-        ws.column_dimensions[get_column_letter(2 + i * 2)].width = 13
-        ws.column_dimensions[get_column_letter(3 + i * 2)].width = 22
+        ws.column_dimensions[get_column_letter(2 + i * 2)].width = 22
+        ws.column_dimensions[get_column_letter(3 + i * 2)].width = 13
     _page_setup(ws, view, generated_at)
 
     buf = io.BytesIO()

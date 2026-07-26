@@ -254,15 +254,17 @@ def _truncated(pdf: FPDF, text: str, width: float) -> str:
     return text + "…"
 
 
-# transposed master table: one ROW per day, one COLUMN per period. A
-# day row is divided into teacher LANES — every teacher working that
-# day owns ONE two-sub-row band across ALL the day's periods (name on
-# both rows, ONE student per sub-row, second row empty for a single
-# student; the band stays blank in periods the teacher is off). Bands
-# are tinted with the teacher's UI color. Subjects/rooms not shown.
+# transposed master table: one ROW per day, one COLUMN per period,
+# ONE WEEK PER PAGE (sub-rows shrink to make the week fit). A day row
+# is divided into teacher LANES — every teacher working that day owns
+# ONE two-sub-row band across ALL the day's periods (student on the
+# left, the teacher's name on the right of each sub-row; one student
+# per row, second row empty for a single student; the band stays blank
+# in periods the teacher is off). Bands are tinted with the teacher's
+# UI color. Subjects/rooms not shown.
 DATE_COL_W = 21.0
-SUB_H = 3.0              # height of one student sub-row (mm)
-NAME_FRAC = 0.34         # teacher-name part of a period cell
+SUB_H = 3.0              # max height of one student sub-row (mm)
+NAME_FRAC = 0.34         # teacher-name part of a period cell (right)
 
 
 def overview_pdf(view: dict, generated_at: str) -> bytes:
@@ -302,7 +304,6 @@ def overview_pdf(view: dict, generated_at: str) -> bytes:
 
     per_w = (GRID_W - DATE_COL_W) / len(periods)
     name_w = per_w * NAME_FRAC
-    block_h = rows_per * SUB_H
     top = MARGIN + HEADER_H
     bottom = PAGE_H - FOOTER_H - 2.0
 
@@ -321,79 +322,90 @@ def overview_pdf(view: dict, generated_at: str) -> bytes:
             pdf.cell(per_w, WDAY_H, head, border=1, align="C", fill=True)
         return y0 + WDAY_H
 
-    pdf.add_page()
-    y = table_header(top)
-    for day in days:
-        lanes = day_teachers(day)
-        row_h = max(1, len(lanes)) * block_h
-        if y + row_h > bottom:
-            pdf.add_page()
-            y = table_header(top)
-        # date cell (weekday colored the Japanese way)
-        d = dt.date.fromisoformat(day["date"])
-        pdf.set_draw_color(0)
-        pdf.rect(MARGIN, y, DATE_COL_W, row_h)
-        wd = day["weekday"]
-        if wd == "Sun":
-            pdf.set_text_color(190, 30, 30)
-        elif wd == "Sat":
-            pdf.set_text_color(30, 60, 190)
-        else:
-            pdf.set_text_color(0)
-        pdf.set_font("noto", size=SIZE_DATE)
-        pdf.set_xy(MARGIN + 1, y + row_h / 2 - 2)
-        pdf.cell(DATE_COL_W - 2, 4,
-                 f"{d.month}/{d.day}({WEEKDAY_JA[wd]})")
-        slots = {s["period"]: s for s in day["slots"]}
-        for i, p in enumerate(periods):
-            x = MARGIN + DATE_COL_W + i * per_w
-            slot = slots.get(p)
-            if slot is None:                    # no such period this day
-                pdf.set_fill_color(240)
-                pdf.rect(x, y, per_w, row_h, style="DF")
-                continue
-            pdf.rect(x, y, per_w, row_h)
-            # this slot's entries by teacher id — placed into the
-            # day-wide lane of that teacher, blank where they are off
-            here = {t.get("teacher_id", t["teacher_name"]): t
-                    for t in slot["entries"]}
-            for k, (tid, _tname) in enumerate(lanes):
-                if tid in here:
-                    by = y + k * block_h
-                    pdf.set_fill_color(*teacher_fill_rgb(tid))
-                    pdf.rect(x + 0.1, by + 0.1,
-                             per_w - 0.2, block_h - 0.2, style="F")
-            # light separators: one per student sub-row, plus the
-            # name|student split
-            pdf.set_draw_color(200)
-            for k in range(1, max(1, len(lanes)) * rows_per):
-                pdf.line(x, y + k * SUB_H, x + per_w, y + k * SUB_H)
-            pdf.line(x + name_w, y, x + name_w, y + row_h)
+    weeks = [[c for c in w if c["in_term"]] for w in view["weeks"]]
+    weeks = [w for w in weeks if w]
+    for wdays in weeks:                    # ---- one page per week
+        pdf.add_page()
+        y = table_header(top)
+        # shrink the sub-row height until the whole week fits the page
+        units = sum(max(1, len(day_teachers(d))) for d in wdays) \
+            * rows_per
+        sub_h = min(SUB_H, (bottom - y) / units)
+        block_h = rows_per * sub_h
+        body_size = min(SIZE_BODY, sub_h * 2.1)
+        for day in wdays:
+            lanes = day_teachers(day)
+            row_h = max(1, len(lanes)) * block_h
+            # date cell (weekday colored the Japanese way)
+            d = dt.date.fromisoformat(day["date"])
             pdf.set_draw_color(0)
-            for k, (tid, tname) in enumerate(lanes):
-                t = here.get(tid)
-                if t is None:
-                    continue               # teacher off this period
-                pupils = [l["student_name"] for l in t["lessons"]]
-                for j in range(rows_per):
-                    sy = y + k * block_h + j * SUB_H
-                    # the teacher's name on EVERY row of their block
-                    pdf.set_text_color(0)
-                    size = _fit_text(pdf, tname, name_w - 1.2, SIZE_BODY)
-                    pdf.set_font("noto", size=size)
-                    pdf.set_xy(x + 0.6, sy)
-                    pdf.cell(name_w - 1.2, SUB_H,
-                             _truncated(pdf, tname, name_w - 1.2))
-                    if j < len(pupils):        # one student per row
-                        pupil = pupils[j]
-                        size = _fit_text(pdf, pupil,
-                                         per_w - name_w - 1.2, SIZE_BODY)
+            pdf.rect(MARGIN, y, DATE_COL_W, row_h)
+            wd = day["weekday"]
+            if wd == "Sun":
+                pdf.set_text_color(190, 30, 30)
+            elif wd == "Sat":
+                pdf.set_text_color(30, 60, 190)
+            else:
+                pdf.set_text_color(0)
+            pdf.set_font("noto", size=SIZE_DATE)
+            pdf.set_xy(MARGIN + 1, y + row_h / 2 - 2)
+            pdf.cell(DATE_COL_W - 2, 4,
+                     f"{d.month}/{d.day}({WEEKDAY_JA[wd]})")
+            slots = {s["period"]: s for s in day["slots"]}
+            for i, p in enumerate(periods):
+                x = MARGIN + DATE_COL_W + i * per_w
+                slot = slots.get(p)
+                if slot is None:                # no such period this day
+                    pdf.set_fill_color(240)
+                    pdf.rect(x, y, per_w, row_h, style="DF")
+                    continue
+                pdf.rect(x, y, per_w, row_h)
+                # this slot's entries by teacher id — placed into the
+                # day-wide lane of that teacher, blank where they're off
+                here = {t.get("teacher_id", t["teacher_name"]): t
+                        for t in slot["entries"]}
+                for k, (tid, _tname) in enumerate(lanes):
+                    if tid in here:
+                        by = y + k * block_h
+                        pdf.set_fill_color(*teacher_fill_rgb(tid))
+                        pdf.rect(x + 0.1, by + 0.1,
+                                 per_w - 0.2, block_h - 0.2, style="F")
+                # light separators: one per student sub-row, plus the
+                # student|name split (teacher name on the RIGHT)
+                split_x = x + per_w - name_w
+                pdf.set_draw_color(200)
+                for k in range(1, max(1, len(lanes)) * rows_per):
+                    pdf.line(x, y + k * sub_h, x + per_w, y + k * sub_h)
+                pdf.line(split_x, y, split_x, y + row_h)
+                pdf.set_draw_color(0)
+                for k, (tid, tname) in enumerate(lanes):
+                    t = here.get(tid)
+                    if t is None:
+                        continue           # teacher off this period
+                    pupils = [l["student_name"] for l in t["lessons"]]
+                    for j in range(rows_per):
+                        sy = y + k * block_h + j * sub_h
+                        # student on the left — one per row
+                        if j < len(pupils):
+                            pupil = pupils[j]
+                            size = _fit_text(pdf, pupil,
+                                             per_w - name_w - 1.2,
+                                             body_size)
+                            pdf.set_text_color(0)
+                            pdf.set_font("noto", size=size)
+                            pdf.set_xy(x + 0.6, sy)
+                            pdf.cell(per_w - name_w - 1.2, sub_h,
+                                     _truncated(pdf, pupil,
+                                                per_w - name_w - 1.2))
+                        # the teacher's name on the RIGHT of every row
+                        pdf.set_text_color(0)
+                        size = _fit_text(pdf, tname, name_w - 1.2,
+                                         body_size)
                         pdf.set_font("noto", size=size)
-                        pdf.set_xy(x + name_w + 0.6, sy)
-                        pdf.cell(per_w - name_w - 1.2, SUB_H,
-                                 _truncated(pdf, pupil,
-                                            per_w - name_w - 1.2))
-        y += row_h
+                        pdf.set_xy(split_x + 0.6, sy)
+                        pdf.cell(name_w - 1.2, sub_h,
+                                 _truncated(pdf, tname, name_w - 1.2))
+            y += row_h
     return bytes(pdf.output())
 
 
