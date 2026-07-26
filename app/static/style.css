@@ -191,6 +191,11 @@ body.banding { user-select: none; }
 .area-bar button.pair-badge { border: 1px solid transparent;
                               cursor: pointer; font: inherit;
                               padding: 0.15rem 0.45rem; }
+/* student-needs matrix */
+.grid-scroll input { user-select: text; }
+.need-cell { text-align: center; }
+.need-total { text-align: center; font-weight: 600;
+              color: var(--muted); }
 td.pair-hard { background: #f6d5d3; color: #8f1d18; font-weight: 700; }
 td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
 .pair-badge { display: inline-block; min-width: 1.2rem; text-align: center;
