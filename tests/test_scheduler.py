@@ -4,7 +4,8 @@ import pytest
 from app.scheduler import (Dataset, Lesson, Room, Timeslot,
                            check_input_problems, coverage_report,
                            objective_term_values, optimize_teacher_days,
-                           pair_miss_points, schedule_objective, solve,
+                           pair_miss_points, schedule_objective,
+                           slot_penalty_points, solve,
                            student_day_stats, teacher_day_stats,
                            teacher_single_days, validate)
 
@@ -717,7 +718,7 @@ def test_objective_counts_slots_days_and_spreads():
     assert stats["t1"]["days"] == {DATE_OF["Mon"], DATE_OF["Tue"]}
     assert stats["t2"] == {"lessons": 0, "days": set()}
     # t1: 2 lessons/2 days, t2: 0/0 -> spreads 2, total days 2
-    assert schedule_objective(d, lessons) == (0, 0, 0, 2, 2, 2, 2)
+    assert schedule_objective(d, lessons) == (0, 0, 0, 2, 2, 2, 2, 0)
 
 
 def test_teacher_single_days_threshold():
@@ -775,7 +776,7 @@ def test_objective_ignores_ineligible_teachers():
     d.teachers["t9"] = "Ghost"          # no subjects, no availability
     lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
                Lesson("s2", "eng", "t2", "r1", "mon-1", id=2)]
-    assert schedule_objective(d, lessons) == (0, 0, 0, 0, 2, 2, 0)   # t9 not counted
+    assert schedule_objective(d, lessons) == (0, 0, 0, 0, 2, 2, 0, 0)   # t9 not counted
 
 
 def test_optimize_packs_teacher_into_fewer_days():
@@ -788,7 +789,7 @@ def test_optimize_packs_teacher_into_fewer_days():
                Lesson("s2", "eng", "t1", "r1", "tue-1")]
     out = optimize_teacher_days(d, lessons)
     assert validate(d, out) == []
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0, 0)
     assert sorted((l.student_id, l.subject_id) for l in out) == \
         [("s1", "math"), ("s2", "eng")]              # coverage untouched
 
@@ -819,7 +820,7 @@ def test_optimize_balances_days_across_teachers():
                               ("s2", "tue-1"), ("s2", "tue-2")}
     out = optimize_teacher_days(d, lessons)
     assert validate(d, out) == []
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0)   # one lesson+day each
+    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0, 0)   # one lesson+day each
     assert {l.teacher_id for l in out} == {"t1", "t2"}
 
 
@@ -835,7 +836,7 @@ def test_optimize_keeps_fixed_lessons_pinned():
     # the movable lesson joins the fixed lesson's day instead
     moved = next(l for l in out if l.student_id == "s2")
     assert d.timeslots[moved.timeslot_id].date == DATE_OF["Tue"]
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0, 0)
 
 
 def test_optimize_rebalances_idle_teacher_even_at_day_cost():
@@ -852,7 +853,7 @@ def test_optimize_rebalances_idle_teacher_even_at_day_cost():
     assert validate(d, out) == []
     counts = sorted((l.teacher_id for l in out))
     assert counts == ["t1", "t2"]                    # one lesson each
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0, 0)
 
 
 def test_optimize_balances_realistic_lopsided_schedule():
@@ -961,3 +962,53 @@ def test_check_input_clean():
     d = make_data()
     d.student_needs = {("s1", "math"): 2}
     assert check_input_problems(d) == []
+
+# ----------------------------------------------------- timeslot penalties
+
+def test_slot_penalty_points_sums_lesson_slots():
+    d = make_data()
+    d.timeslots["mon-1"] = Timeslot("mon-1", DATE_OF["Mon"], 1, "", 5)
+    d.timeslots["tue-1"] = Timeslot("tue-1", DATE_OF["Tue"], 1, "", 2)
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1"),
+               Lesson("s2", "eng", "t2", "r1", "mon-1"),
+               Lesson("s1", "eng", "t1", "r1", "tue-1"),
+               Lesson("s2", "math", "t2", "r1", "mon-2")]   # penalty-free
+    assert slot_penalty_points(d, lessons) == 5 + 5 + 2
+    assert objective_term_values(d, lessons)["slot_penalty"] == 12
+    # slot_penalty is the LAST element of the default objective tuple
+    assert schedule_objective(d, lessons)[-1] == 12
+
+
+def test_greedy_avoids_penalized_slots():
+    """With a free alternative, the greedy pass never pays a penalty —
+    the preference sits right after the free-day-first rule."""
+    d = make_data()
+    d.timeslots["mon-1"] = Timeslot("mon-1", DATE_OF["Mon"], 1, "", 3)
+    d.student_needs = {("s1", "math"): 1}
+    r = solve(d)
+    assert r.complete and r.nodes_explored == 0
+    assert r.lessons[0].timeslot_id != "mon-1"
+    assert slot_penalty_points(d, r.lessons) == 0
+    assert_solution_valid(d, r)
+
+
+def test_greedy_pays_penalty_when_unavoidable():
+    d = make_data(n_slots_per_day=1, days=("Mon",))
+    d.timeslots["mon-1"] = Timeslot("mon-1", DATE_OF["Mon"], 1, "", 3)
+    d.student_needs = {("s1", "math"): 1}
+    r = solve(d)
+    assert r.complete
+    assert r.lessons[0].timeslot_id == "mon-1"
+    assert slot_penalty_points(d, r.lessons) == 3
+
+
+def test_slot_penalty_objective_cap():
+    """slot_penalty is an ordinary cappable term: exceeding the bound is
+    an objective_cap_exceeded violation, staying within it is clean."""
+    d = make_data()
+    d.timeslots["mon-1"] = Timeslot("mon-1", DATE_OF["Mon"], 1, "", 4)
+    lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1)]
+    assert validate(d, lessons) == []
+    vs = validate(d, lessons, objective_caps={"slot_penalty": 3})
+    assert [v.code for v in vs] == ["objective_cap_exceeded"]
+    assert validate(d, lessons, objective_caps={"slot_penalty": 4}) == []
