@@ -197,6 +197,89 @@ def test_bulk_timeslots_validation(client, body, fragment):
     assert client.get("/api/timeslots").json() == []   # nothing created
 
 
+# -------------------------------------------------------- mass-edit timeslots
+
+def seed_slot_grid(client):
+    """Mon-Sat × periods 1-2 over two weeks, no penalties, no labels."""
+    client.post("/api/timeslots/bulk", json={
+        "start_date": "2026-07-27", "end_date": "2026-08-08",
+        "weekdays": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+        "periods": [{"period": 1}, {"period": 2}]})
+
+
+def test_bulk_edit_penalizes_all_of_one_period(client):
+    """The 'penalize every period-2 slot' use case: no date range, all
+    weekdays, one period."""
+    seed_slot_grid(client)
+    r = client.post("/api/timeslots/bulk_edit", json={
+        "weekdays": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+        "periods": [2], "penalty": 5})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "updated": 12}     # 6 days × 2 weeks
+    slots = client.get("/api/timeslots").json()
+    assert all(s["penalty"] == (5 if s["period"] == 2 else 0)
+               for s in slots)
+
+
+def test_bulk_edit_penalizes_saturday_period_one(client):
+    """'Penalize all Saturday period 1' — weekday × period filter."""
+    seed_slot_grid(client)
+    r = client.post("/api/timeslots/bulk_edit", json={
+        "weekdays": ["Sat"], "periods": [1], "penalty": 9})
+    assert r.json()["updated"] == 2                    # two Saturdays
+    slots = {s["id"]: s for s in client.get("/api/timeslots").json()}
+    assert slots["0801-1"]["penalty"] == 9
+    assert slots["0808-1"]["penalty"] == 9
+    assert slots["0801-2"]["penalty"] == 0             # other period kept
+    assert slots["0727-1"]["penalty"] == 0             # other weekday kept
+
+
+def test_bulk_edit_respects_date_range_and_keeps_other_fields(client):
+    seed_slot_grid(client)
+    client.post("/api/timeslots", json={                # give one a label
+        "id": "0727-1", "date": "2026-07-27", "period": 1,
+        "label": "morning", "penalty": 3})
+    r = client.post("/api/timeslots/bulk_edit", json={
+        "start_date": "2026-07-27", "end_date": "2026-08-01",
+        "weekdays": ["Mon"], "penalty": 7})            # periods [] = all
+    assert r.json()["updated"] == 2                    # 0727-1, 0727-2 only
+    slots = {s["id"]: s for s in client.get("/api/timeslots").json()}
+    assert slots["0727-1"]["penalty"] == 7
+    assert slots["0727-1"]["label"] == "morning"       # label untouched
+    assert slots["0727-2"]["penalty"] == 7
+    assert slots["0803-1"]["penalty"] == 0             # Mon outside range
+
+
+def test_bulk_edit_sets_label_without_touching_penalty(client):
+    seed_slot_grid(client)
+    client.post("/api/timeslots/bulk_edit", json={
+        "weekdays": ["Sat"], "periods": [1], "penalty": 4})
+    r = client.post("/api/timeslots/bulk_edit", json={
+        "weekdays": ["Sat"], "periods": [1], "label": "09:00-10:10"})
+    assert r.json()["updated"] == 2
+    slots = {s["id"]: s for s in client.get("/api/timeslots").json()}
+    assert slots["0801-1"]["label"] == "09:00-10:10"
+    assert slots["0801-1"]["penalty"] == 4             # penalty untouched
+
+
+@pytest.mark.parametrize("body,fragment", [
+    ({"start_date": "bad", "weekdays": ["Mon"], "penalty": 1},
+     "YYYY-MM-DD"),
+    ({"start_date": "2026-08-02", "end_date": "2026-08-01",
+      "weekdays": ["Mon"], "penalty": 1}, "after"),
+    ({"weekdays": ["Monday"], "penalty": 1}, "weekday"),
+    ({"weekdays": [], "penalty": 1}, "at least one weekday"),
+    ({"weekdays": ["Mon"]}, "penalty and/or a label"),
+])
+def test_bulk_edit_validation(client, body, fragment):
+    seed_slot_grid(client)
+    r = client.post("/api/timeslots/bulk_edit", json=body)
+    assert r.status_code == 422
+    assert fragment in r.json()["detail"]
+    slots = client.get("/api/timeslots").json()
+    assert all(s["penalty"] == 0 and s["label"] == "" for s in slots)
+
+
 # ------------------------------------------------------------------ schedule
 
 def test_manual_add_rejects_student_day_gap(client):

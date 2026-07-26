@@ -232,7 +232,13 @@ solver prices the points directly in its objective.
   timeslot row also has a **penalty** field (0 = none): a slot with a
   penalty is avoided by both solvers — every lesson placed there costs
   that many points under the "Avoid penalized timeslots" condition,
-  which is draggable (and cappable) like any other rule.
+  which is draggable (and cappable) like any other rule. The
+  **mass-edit** panel changes many slots at once: pick weekdays, an
+  optional period list, and an optional date range (blank = the whole
+  term), then set the penalty and/or label on every matching slot —
+  e.g. penalize every period-5 slot, or every Saturday period 1, in
+  one click. Blank fields are left unchanged; nothing is created or
+  deleted.
 - **Student needs** tab — an editable student × subject matrix: type
   the session count straight into a cell (saved immediately; blank or
   0 removes the need), with a per-student total column — plus which
