@@ -604,6 +604,9 @@ async function renderAvailability(root) {
       Define timeslots first (Timeslots tab).</p></div>`));
     return;
   }
+  const undoRow = el(`<div class="row"></div>`);
+  undoRow.append(await gridUndoButton());
+  root.append(undoRow);
   await renderAvailGrid(root, "Teacher availability", teachers,
     "teacher_availability", "teacher_id", sorted);
   await renderAvailGrid(root, "Student availability", students,
@@ -1918,6 +1921,22 @@ async function renderCalendars(root) {
   root.append(panel);
 }
 
+// undo button for the grid tabs (same stack as the timetable's)
+async function gridUndoButton() {
+  const info = await api("GET", "/api/undo");
+  const btn = el(`<button class="action secondary grid-undo"${
+    info.count ? "" : " disabled"} title="${info.count
+      ? `undo: ${esc(info.label)}` : "nothing to undo"}">↩ Undo</button>`);
+  btn.onclick = async () => {
+    try {
+      const res = await api("POST", "/api/schedule/undo");
+      toast(`Undid: ${res.undid}`);
+    } catch (e) { toast(e.message, true); }
+    render();
+  };
+  return btn;
+}
+
 // ---------------------------------------------------------------- assignments
 
 async function renderAssignments(root) {
@@ -1926,7 +1945,8 @@ async function renderAssignments(root) {
   const prio = new Map(
     pairs.map(p => [`${p.student_id}|${p.teacher_id}`, p.priority]));
 
-  const panel = el(`<div class="panel"><h2>Teacher in charge</h2>
+  const panel = el(`<div class="panel">
+    <div class="tt-head"><h2>Teacher in charge</h2></div>
     <p class="muted">Click a cell, then pick:
       <span class="pair-badge pair-hard">0</span> = the student
       <b>must</b> be taught by this teacher (hard rule);
@@ -2010,6 +2030,7 @@ async function renderAssignments(root) {
     return;
   }
   enhanceGrid($(".grid-scroll", panel));
+  $(".tt-head", panel).append(await gridUndoButton());
 
   // drag-select a rectangle -> assign/clear/copy/paste the whole block
   const bar = el(`<div class="row area-bar" hidden>

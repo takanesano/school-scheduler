@@ -325,19 +325,35 @@ class TeacherStudentIn(BaseModel):
 
 @app.post("/api/teacher_students")
 def add_teacher_student(item: TeacherStudentIn, conn=Depends(get_conn)):
+    prior = conn.execute(
+        "SELECT priority FROM teacher_students WHERE teacher_id=? "
+        "AND student_id=?", (item.teacher_id, item.student_id)).fetchone()
     _insert_link(conn, "teacher_students",
                  ["teacher_id", "student_id", "priority"],
                  (item.teacher_id, item.student_id, item.priority))
+    if prior is None or prior["priority"] != item.priority:
+        inv = ({"set": [[item.teacher_id, item.student_id,
+                         prior["priority"]]], "clear": []}
+               if prior is not None else
+               {"set": [], "clear": [[item.teacher_id, item.student_id]]})
+        _push_undo(conn, "assignment change", {"pairs": inv})
     return {"ok": True}
 
 
 @app.delete("/api/teacher_students")
 def del_teacher_student(teacher_id: str, student_id: str,
                         conn=Depends(get_conn)):
+    prior = conn.execute(
+        "SELECT priority FROM teacher_students WHERE teacher_id=? "
+        "AND student_id=?", (teacher_id, student_id)).fetchone()
     with conn:
         conn.execute(
             "DELETE FROM teacher_students WHERE teacher_id=? AND student_id=?",
             (teacher_id, student_id))
+    if prior is not None:
+        _push_undo(conn, "assignment change", {"pairs": {
+            "set": [[teacher_id, student_id, prior["priority"]]],
+            "clear": []}})
     return {"ok": True}
 
 
@@ -374,33 +390,55 @@ def del_need(student_id: str, subject_id: str, conn=Depends(get_conn)):
 
 @app.post("/api/teacher_availability")
 def add_teacher_avail(item: TeacherAvailIn, conn=Depends(get_conn)):
+    existed = conn.execute(
+        "SELECT 1 FROM teacher_availability WHERE teacher_id=? "
+        "AND timeslot_id=?", (item.teacher_id, item.timeslot_id)).fetchone()
     _insert_link(conn, "teacher_availability", ["teacher_id", "timeslot_id"],
                  (item.teacher_id, item.timeslot_id))
+    if not existed:
+        _push_undo(conn, "availability change", {"avail": {
+            "table": "teacher_availability", "add": [],
+            "remove": [[item.teacher_id, item.timeslot_id]]}})
     return {"ok": True}
 
 
 @app.delete("/api/teacher_availability")
 def del_teacher_avail(teacher_id: str, timeslot_id: str, conn=Depends(get_conn)):
     with conn:
-        conn.execute(
+        cur = conn.execute(
             "DELETE FROM teacher_availability WHERE teacher_id=? AND timeslot_id=?",
             (teacher_id, timeslot_id))
+    if cur.rowcount:
+        _push_undo(conn, "availability change", {"avail": {
+            "table": "teacher_availability",
+            "add": [[teacher_id, timeslot_id]], "remove": []}})
     return {"ok": True}
 
 
 @app.post("/api/student_availability")
 def add_student_avail(item: StudentAvailIn, conn=Depends(get_conn)):
+    existed = conn.execute(
+        "SELECT 1 FROM student_availability WHERE student_id=? "
+        "AND timeslot_id=?", (item.student_id, item.timeslot_id)).fetchone()
     _insert_link(conn, "student_availability", ["student_id", "timeslot_id"],
                  (item.student_id, item.timeslot_id))
+    if not existed:
+        _push_undo(conn, "availability change", {"avail": {
+            "table": "student_availability", "add": [],
+            "remove": [[item.student_id, item.timeslot_id]]}})
     return {"ok": True}
 
 
 @app.delete("/api/student_availability")
 def del_student_avail(student_id: str, timeslot_id: str, conn=Depends(get_conn)):
     with conn:
-        conn.execute(
+        cur = conn.execute(
             "DELETE FROM student_availability WHERE student_id=? AND timeslot_id=?",
             (student_id, timeslot_id))
+    if cur.rowcount:
+        _push_undo(conn, "availability change", {"avail": {
+            "table": "student_availability",
+            "add": [[student_id, timeslot_id]], "remove": []}})
     return {"ok": True}
 
 
@@ -415,6 +453,11 @@ class AvailBulkIn(BaseModel):
 def _bulk_avail(conn, table: str, idcol: str, body: AvailBulkIn):
     if any(len(p) != 2 for p in body.add + body.remove):
         raise HTTPException(422, "pairs must be [person_id, timeslot_id]")
+    existing = {(r[idcol], r["timeslot_id"]) for r in conn.execute(
+        f"SELECT {idcol}, timeslot_id FROM {table}")}  # noqa: S608
+    inverse = {"table": table,
+               "add": [p for p in body.remove if tuple(p) in existing],
+               "remove": [p for p in body.add if tuple(p) not in existing]}
     try:
         with conn:
             conn.executemany(
@@ -425,6 +468,8 @@ def _bulk_avail(conn, table: str, idcol: str, body: AvailBulkIn):
                 [tuple(p) for p in body.remove])
     except sqlite3.IntegrityError as e:
         raise HTTPException(422, f"Unknown reference: {e}")
+    if inverse["add"] or inverse["remove"]:
+        _push_undo(conn, "availability block edit", {"avail": inverse})
     return {"ok": True, "added": len(body.add),
             "removed": len(body.remove)}
 
@@ -457,6 +502,22 @@ def bulk_teacher_students(body: PairBulkIn, conn=Depends(get_conn)):
     if any(len(p) != 2 for p in body.clear):
         raise HTTPException(
             422, "clear entries must be [teacher_id, student_id]")
+    prior = {(r["teacher_id"], r["student_id"]): r["priority"]
+             for r in conn.execute(
+                 "SELECT teacher_id, student_id, priority "
+                 "FROM teacher_students")}
+    inverse = {"set": [], "clear": []}
+    for p in body.set:
+        key = (p[0], p[1])
+        if key in prior:
+            if prior[key] != p[2]:
+                inverse["set"].append([p[0], p[1], prior[key]])
+        else:
+            inverse["clear"].append([p[0], p[1]])
+    for p in body.clear:
+        key = (p[0], p[1])
+        if key in prior:
+            inverse["set"].append([p[0], p[1], prior[key]])
     try:
         with conn:
             conn.executemany(
@@ -469,6 +530,8 @@ def bulk_teacher_students(body: PairBulkIn, conn=Depends(get_conn)):
                 [tuple(p) for p in body.clear])
     except sqlite3.IntegrityError as e:
         raise HTTPException(422, f"Unknown reference: {e}")
+    if inverse["set"] or inverse["clear"]:
+        _push_undo(conn, "assignment block edit", {"pairs": inverse})
     return {"ok": True, "set": len(body.set), "cleared": len(body.clear)}
 
 
@@ -639,19 +702,28 @@ class LessonIn(BaseModel):
     force: bool = False   # allow saving despite violations
 
 
-UNDO_LIMIT = 20
+UNDO_LIMIT = 30
+
+# grid tables that support delta-undo: table -> its person id column
+AVAIL_TABLES = {"teacher_availability": "teacher_id",
+                "student_availability": "student_id"}
 
 
-def _push_undo(conn: sqlite3.Connection, label: str) -> None:
-    """Snapshot the lessons table just before one MANUAL edit. Undo
-    restores the latest snapshot verbatim (original ids included)."""
-    rows = [dict(r) for r in conn.execute(
-        "SELECT id, student_id, subject_id, teacher_id, room_id, "
-        "timeslot_id, locked FROM lessons ORDER BY id")]
+def _push_undo(conn: sqlite3.Connection, label: str,
+               payload=None) -> None:
+    """Record one undoable MANUAL edit. Without ``payload`` this
+    snapshots the whole lessons table (restored verbatim, ids
+    included); grid edits pass an INVERSE-delta payload instead:
+    {"avail": {table, add, remove}} or {"pairs": {set, clear}} — the
+    exact bulk operation that reverts the change."""
+    if payload is None:
+        payload = [dict(r) for r in conn.execute(
+            "SELECT id, student_id, subject_id, teacher_id, room_id, "
+            "timeslot_id, locked FROM lessons ORDER BY id")]
     with conn:
         conn.execute(
             "INSERT INTO undo_stack (label, snapshot) VALUES (?, ?)",
-            (label, json.dumps(rows)))
+            (label, json.dumps(payload)))
         conn.execute(
             "DELETE FROM undo_stack WHERE id NOT IN "
             "(SELECT id FROM undo_stack ORDER BY id DESC LIMIT ?)",
@@ -1096,28 +1168,63 @@ def clear_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     return {"ok": True, "deleted": cur.rowcount, "kept_locked": kept}
 
 
+@app.get("/api/undo")
+def undo_info(conn: sqlite3.Connection = Depends(get_conn)):
+    return _undo_info(conn)
+
+
 @app.post("/api/schedule/undo")
 def undo_last_edit(conn: sqlite3.Connection = Depends(get_conn)):
-    """Revert the last MANUAL timetable edit (add / move / edit / bulk
-    edit / repeat / delete). Solver runs and Clear schedule reset the
-    history, so undo never rolls back a generated schedule."""
+    """Revert the last MANUAL edit: timetable changes (add / move /
+    edit / bulk edit / repeat / delete — restored from a full lessons
+    snapshot) and Availability / Assignments grid edits (restored by
+    applying the stored inverse delta). Solver runs and Clear schedule
+    reset the history, so undo never rolls back a generated
+    schedule."""
     row = conn.execute("SELECT id, label, snapshot FROM undo_stack "
                        "ORDER BY id DESC LIMIT 1").fetchone()
     if row is None:
         raise HTTPException(404, "Nothing to undo")
-    rows = json.loads(row["snapshot"])
+    snap = json.loads(row["snapshot"])
     try:
         with conn:
             conn.execute("DELETE FROM undo_stack WHERE id = ?",
                          (row["id"],))
-            conn.execute("DELETE FROM lessons")
-            conn.executemany(
-                "INSERT INTO lessons (id, student_id, subject_id, "
-                "teacher_id, room_id, timeslot_id, locked) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(r["id"], r["student_id"], r["subject_id"],
-                  r["teacher_id"], r["room_id"], r["timeslot_id"],
-                  r["locked"]) for r in rows])
+            if isinstance(snap, list):
+                # lessons snapshot: restore the table verbatim
+                conn.execute("DELETE FROM lessons")
+                conn.executemany(
+                    "INSERT INTO lessons (id, student_id, subject_id, "
+                    "teacher_id, room_id, timeslot_id, locked) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [(r["id"], r["student_id"], r["subject_id"],
+                      r["teacher_id"], r["room_id"], r["timeslot_id"],
+                      r["locked"]) for r in snap])
+            elif "avail" in snap:
+                d = snap["avail"]
+                idcol = AVAIL_TABLES.get(d.get("table"))
+                if idcol is None:
+                    raise sqlite3.IntegrityError("unknown table")
+                conn.executemany(
+                    f"INSERT OR REPLACE INTO {d['table']} "  # noqa: S608
+                    f"({idcol}, timeslot_id) VALUES (?, ?)",
+                    [tuple(p) for p in d["add"]])
+                conn.executemany(
+                    f"DELETE FROM {d['table']} "  # noqa: S608
+                    f"WHERE {idcol}=? AND timeslot_id=?",
+                    [tuple(p) for p in d["remove"]])
+            elif "pairs" in snap:
+                d = snap["pairs"]
+                conn.executemany(
+                    "INSERT OR REPLACE INTO teacher_students "
+                    "(teacher_id, student_id, priority) VALUES (?, ?, ?)",
+                    [tuple(p) for p in d["set"]])
+                conn.executemany(
+                    "DELETE FROM teacher_students "
+                    "WHERE teacher_id=? AND student_id=?",
+                    [tuple(p) for p in d["clear"]])
+            else:
+                raise sqlite3.IntegrityError("unknown snapshot format")
     except sqlite3.IntegrityError:
         # the snapshot references data that no longer exists (e.g. a
         # deleted student) — drop the stale entry instead of failing
