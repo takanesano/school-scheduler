@@ -605,8 +605,71 @@ function renderTimeslotsBulk(root) {
   root.append(panel);
 }
 
+function renderTimeslotsMassEdit(root) {
+  const panel = el(`<div class="panel"><h2>Mass-edit timeslots</h2>
+    <div class="row">
+      from <input id="e-start" type="date" title="blank = from the first slot">
+      to <input id="e-end" type="date" title="blank = to the last slot">
+      <span class="muted">(leave blank for the whole term — e.g. select
+        only Sat + period 1 to hit every Saturday period 1)</span>
+    </div>
+    <div class="row" id="e-days">
+      ${WEEKDAYS.map(d =>
+        `<label><input type="checkbox" value="${d}" checked> ${d}</label>`)
+        .join("")}
+    </div>
+    <div class="row">
+      periods <input id="e-periods" style="width:10rem"
+        placeholder="e.g. 5,6 (blank = all)">
+      set penalty to <input id="e-penalty" type="number" min="0" max="99"
+        style="width:5rem" placeholder="keep">
+      set label to <input id="e-label" style="min-width:14rem"
+        placeholder="(keep)">
+      <button class="action" id="e-apply">Apply to matching</button>
+    </div>
+    <p class="muted">Updates every EXISTING timeslot in the date range
+      whose weekday and period match — nothing is created or deleted.
+      Blank penalty / label fields are left unchanged on the slots.</p>
+    </div>`);
+  $("#e-apply", panel).onclick = async () => {
+    const start = $("#e-start", panel).value;
+    const end = $("#e-end", panel).value;
+    const weekdays = [...panel.querySelectorAll("#e-days input:checked")]
+      .map(cb => cb.value);
+    const rawPeriods = $("#e-periods", panel).value.trim();
+    let periods = [];
+    if (rawPeriods) {
+      periods = rawPeriods.split(",").map(s => parseInt(s.trim(), 10));
+      if (periods.some(p => !(p >= 1))) {
+        return toast("periods must be comma-separated numbers ≥ 1", true);
+      }
+    }
+    const rawPen = $("#e-penalty", panel).value.trim();
+    const rawLabel = $("#e-label", panel).value;
+    const body = { weekdays, periods };
+    if (start) body.start_date = start;
+    if (end) body.end_date = end;
+    if (rawPen !== "") {
+      const v = parseInt(rawPen, 10);
+      if (!(v >= 0 && v <= 99)) return toast("penalty must be 0-99", true);
+      body.penalty = v;
+    }
+    if (rawLabel !== "") body.label = rawLabel;
+    if (body.penalty === undefined && body.label === undefined) {
+      return toast("enter a penalty and/or a label to set", true);
+    }
+    try {
+      const res = await api("POST", "/api/timeslots/bulk_edit", body);
+      toast(`Updated ${res.updated} timeslot(s)`);
+      render();
+    } catch (e) { toast(e.message, true); }
+  };
+  root.append(panel);
+}
+
 async function renderTimeslots(root) {
   renderTimeslotsBulk(root);
+  renderTimeslotsMassEdit(root);
   const rows = sortSlots(await list("timeslots"));
   const panel = el(`<div class="panel"><h2>Timeslots</h2>
     <div class="row">
