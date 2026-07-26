@@ -181,8 +181,19 @@ solver prices the points directly in its objective.
   **overview** of every timeslot grouped by teacher with their students, a
   **per-student** calendar showing that student's subject in each timeslot,
   and a **per-teacher** calendar showing the subject and student they teach
-  in each timeslot. The Print button produces a clean handout (controls
-  and navigation are hidden when printing).
+  in each timeslot. The Print button produces a quick draft via the
+  browser; the **PDF handout links** produce properly formatted
+  A4-landscape documents (Japanese labels) — the current person's
+  schedule, or batch documents with **one page per student / per
+  teacher** for the whole school in a single file. Every PDF page
+  footer carries the term span, generation timestamp and page numbers,
+  so stale copies are recognizable after a re-generate. The endpoints
+  (`/api/print/overview.pdf`, `/api/print/students.pdf`,
+  `/api/print/teachers.pdf`) also accept `ids=` (comma-separated) and
+  `date_from=`/`date_to=` (YYYY-MM-DD) to print subsets. The master
+  table is also available as an editable **Excel workbook**
+  (`/api/print/overview.xlsx`, same layout and filters: merged date
+  cells, teacher/students column pairs, A4-landscape print setup).
 - **Schedule** tab — generate/clear the timetable, see violations and
   coverage warnings, add or delete individual lessons, **drag a lesson
   card onto another timeslot to move it**, and use the card's ✎ button to

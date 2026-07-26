@@ -86,6 +86,8 @@ label.action.secondary {
   font-size: 0.85rem;
   text-decoration: none;
 }
+a.action.secondary[hidden] { display: none; }
+.pdf-row { margin-top: 0.4rem; align-items: center; }
 button.small {
   padding: 0.15rem 0.5rem;
   font-size: 0.8rem;
