@@ -95,6 +95,12 @@ class Dataset:
     student_availability: set[tuple[str, str]] = field(default_factory=set)
 
 
+class SolveCancelled(Exception):
+    """Raised when the caller-supplied should_stop() turns true mid-
+    solve; the API layer turns it into a 'generation cancelled'
+    response without touching the stored schedule."""
+
+
 @dataclass(frozen=True)
 class Violation:
     code: str        # e.g. "teacher_double_booked"
@@ -438,7 +444,8 @@ def check_input_problems(data: Dataset) -> list[str]:
 def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
           teacher_capacity: int = 2,
           student_day_cap: int = 2, require_consecutive: bool = True,
-          max_nodes: int = 500_000) -> SolveResult:
+          max_nodes: int = 500_000,
+          should_stop=None) -> SolveResult:
     """Greedy-first placement with exhaustive backtracking as fallback.
 
     v1 is the FAST, approximate solver (v2/CP-SAT is the slow exact one),
@@ -516,6 +523,8 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
         count of requirements that found no spot. Mutates state/placed."""
         missing: Counter = Counter()
         for (st, su) in requirements:
+            if should_stop and should_stop():
+                raise SolveCancelled()
             opts = candidates(st, su)      # full scan: keep the free-day
             if opts:                       # / balance preference ordering
                 s, t, r = opts[0]
@@ -545,6 +554,8 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
     sys.setrecursionlimit(max(_old_limit, len(requirements) + 500))
 
     def search(remaining: list[tuple[str, str]]) -> bool:
+        if should_stop and should_stop():
+            raise SolveCancelled()
         nonlocal nodes, exhausted
         if not remaining:
             return True
@@ -781,7 +792,8 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
                           require_consecutive: bool = True,
                           objective_order: list[str] | None = None,
                           max_rounds: int = 200,
-                          single_day_max: int = 1) -> list[Lesson]:
+                          single_day_max: int = 1,
+                          should_stop=None) -> list[Lesson]:
     """Deterministic local search improving ``schedule_objective``.
 
     Only ``movable`` lessons are changed; ``fixed`` ones (e.g. lessons the
@@ -836,6 +848,8 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
     room_ids = sorted(data.rooms)
 
     for _ in range(max_rounds):
+        if should_stop and should_stop():
+            raise SolveCancelled()
         improved = False
         best = obj(work)
         stats = teacher_day_stats(data, fixed + work)

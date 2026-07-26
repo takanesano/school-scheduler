@@ -95,6 +95,11 @@ works toward it first and the Status panel reports a violation if it
 cannot be met. Drag the card back below the divider to make it a soft
 priority again.
 
+Both solvers can be **cancelled mid-run** (a Cancel button appears
+next to the progress bar); a cancelled generation leaves the stored
+schedule untouched. The drag-sorted priority order is a **saved
+setting** — it survives reloads and is used by every generate.
+
 Two solvers, one explicit trade-off (chosen in the Generate panel):
 
 - **Standard** — fast and approximate, by design. A greedy pass places

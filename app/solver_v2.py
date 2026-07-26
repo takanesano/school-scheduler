@@ -37,11 +37,11 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 
-from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, SolveResult,
-                        _slot_sort_key, coverage_report, eligible_teachers,
-                        hard_pair_teachers, objective_term_values,
-                        optimize_teacher_days, pair_miss_points, solve,
-                        validate)
+from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, SolveCancelled,
+                        SolveResult, _slot_sort_key, coverage_report,
+                        eligible_teachers, hard_pair_teachers,
+                        objective_term_values, optimize_teacher_days,
+                        pair_miss_points, solve, validate)
 
 
 @dataclass(frozen=True)
@@ -141,11 +141,13 @@ def weighted_cost(data: Dataset, lessons: list[Lesson],
 
 
 def _v1_pipeline(data: Dataset, config: SolverConfig,
-                 fixed_lessons: list[Lesson] | None) -> SolveResult:
+                 fixed_lessons: list[Lesson] | None,
+                 should_stop=None) -> SolveResult:
     result = solve(data, fixed_lessons=fixed_lessons,
                    teacher_capacity=config.teacher_capacity,
                    student_day_cap=config.student_day_cap,
-                   require_consecutive=config.require_consecutive)
+                   require_consecutive=config.require_consecutive,
+                   should_stop=should_stop)
     if result.complete:
         pinned = list(fixed_lessons or [])
         movable = [l for l in result.lessons if l not in pinned]
@@ -159,14 +161,16 @@ def _v1_pipeline(data: Dataset, config: SolverConfig,
             student_day_cap=config.student_day_cap,
             require_consecutive=config.require_consecutive,
             objective_order=order,
-            single_day_max=config.single_day_max)
+            single_day_max=config.single_day_max,
+            should_stop=should_stop)
     return result
 
 
 def solve_v2(data: Dataset, config: SolverConfig | None = None,
              fixed_lessons: list[Lesson] | None = None,
              reference: list[Lesson] | None = None,
-             incumbent: list[Lesson] | None = None) -> SolveResult:
+             incumbent: list[Lesson] | None = None,
+             cancel=None) -> SolveResult:
     """Optimize the weighted cost directly; never worse than what the
     user already has.
 
@@ -183,8 +187,11 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
     infeasible, …).
     """
     config = config or SolverConfig()
+    should_stop = (cancel.event.is_set if cancel is not None else None)
+    if should_stop and should_stop():
+        raise SolveCancelled()
     pinned = list(fixed_lessons or [])
-    v1 = _v1_pipeline(data, config, pinned)
+    v1 = _v1_pipeline(data, config, pinned, should_stop=should_stop)
 
     def fully_valid(lessons):
         return not (validate(data, lessons, config.teacher_capacity,
@@ -210,7 +217,10 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
         hint = incumbent
     else:
         hint = v1.lessons
-    cp, cp_state = _solve_cpsat(data, config, pinned, reference, hint)
+    cp, cp_state = _solve_cpsat(data, config, pinned, reference, hint,
+                                cancel=cancel)
+    if should_stop and should_stop():
+        raise SolveCancelled()
     if cp is not None and not fully_valid(cp.lessons):
         cp, cp_state = None, "invalid_output"   # backend misbehaved
     cp_cost = (weighted_cost(data, cp.lessons, config, reference)
@@ -273,8 +283,8 @@ def resolve_minimal_disruption(data: Dataset, current: list[Lesson],
 def _solve_cpsat(data: Dataset, config: SolverConfig,
                  pinned: list[Lesson],
                  reference: list[Lesson] | None,
-                 hint: list[Lesson] | None = None
-                 ) -> tuple[SolveResult | None, str]:
+                 hint: list[Lesson] | None = None,
+                 cancel=None) -> tuple[SolveResult | None, str]:
     """Build and solve the CP-SAT model.
 
     Returns (result, state); result None = defer to v1, with state
@@ -610,7 +620,13 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
         for key, var in sorted(x.items()):
             m.AddHint(var, 1 if key in hint_keys else 0)
 
+    if cancel is not None and cancel.event.is_set():
+        raise SolveCancelled()
     solver = cp_model.CpSolver()
+    if cancel is not None:
+        # expose the live solver so /api/schedule/cancel can call
+        # stop_search() on it from another thread
+        cancel.cp = solver
     workers = config.num_workers
     if workers > 1 and config.time_limit_seconds < 5:
         # a wall deadline shorter than the portfolio's startup can kill
@@ -626,6 +642,10 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
     solver.parameters.random_seed = config.random_seed
     solver.parameters.repair_hint = True   # for slightly-stale hints
     status = solver.Solve(m)
+    if cancel is not None:
+        cancel.cp = None
+        if cancel.event.is_set():
+            raise SolveCancelled()
     if status == cp_model.INFEASIBLE:
         return None, "infeasible"
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
