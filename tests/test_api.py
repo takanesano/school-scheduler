@@ -1086,6 +1086,56 @@ def test_bulk_update_validates_input(client):
                        ).status_code == 404
 
 
+def test_paste_lessons_anchored_at_target(client):
+    """Paste maps the earliest copied lesson onto the target slot and
+    shifts the rest by the same day/period offset; missing slots and
+    duplicates are skipped, locks are copied along."""
+    seed_two_weeks(client)
+    clip = []
+    for st, slot in (("s1", "mon-1"), ("s2", "mon-2")):
+        lid = client.post("/api/lessons", json={
+            "student_id": st, "subject_id": "math", "teacher_id": "t1",
+            "room_id": "r1", "timeslot_id": slot}).json()["id"]
+        clip.append({"student_id": st, "subject_id": "math",
+                     "teacher_id": "t1", "room_id": "r1",
+                     "timeslot_id": slot, "locked": st == "s1"})
+        if st == "s1":
+            client.post(f"/api/lessons/{lid}/lock", json={"locked": True})
+
+    # target = next Monday P1: both P1 and P2 exist there -> 2 created
+    r = client.post("/api/lessons/paste", json={
+        "lessons": clip, "target_timeslot_id": "mon2-1"})
+    assert r.status_code == 200
+    assert r.json()["created"] == 2
+    lessons = client.get("/api/schedule").json()["lessons"]
+    pasted = {l["timeslot_id"]: l for l in lessons
+              if l["timeslot_id"].startswith("mon2")}
+    assert set(pasted) == {"mon2-1", "mon2-2"}
+    assert pasted["mon2-1"]["locked"] is True     # lock copied
+    assert pasted["mon2-2"]["locked"] is False
+
+    # target = tue-1 (P1): the P2 companion has no tue-2 slot
+    r = client.post("/api/lessons/paste", json={
+        "lessons": clip, "target_timeslot_id": "tue-1"}).json()
+    assert (r["created"], r["skipped_no_slot"]) == (1, 1)
+    # pasting the same block again -> duplicates skipped
+    r = client.post("/api/lessons/paste", json={
+        "lessons": clip, "target_timeslot_id": "tue-1"}).json()
+    assert (r["created"], r["skipped_duplicate"]) == (0, 1)
+
+    # undo reverts the last paste
+    assert client.post("/api/schedule/undo").json()["undid"] == \
+        "paste lessons"
+
+    assert client.post("/api/lessons/paste", json={
+        "lessons": clip, "target_timeslot_id": "ghost"}
+        ).status_code == 404
+    bad = [dict(clip[0], teacher_id="ghost")]
+    assert client.post("/api/lessons/paste", json={
+        "lessons": bad, "target_timeslot_id": "mon-1"}
+        ).status_code == 422
+
+
 def test_bulk_lock_and_repeat_inherits_lock(client):
     """bulk_lock flips several lessons in one call, and repeat copies
     now inherit the source's lock status."""
