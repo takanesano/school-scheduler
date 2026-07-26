@@ -98,13 +98,25 @@ def test_overview_xlsx_structure():
     ws = load_workbook(io.BytesIO(out)).active
     assert ws.cell(row=1, column=1).value == "日付"
     assert ws.cell(row=1, column=2).value.startswith("①")
-    # Monday block: two teachers in P1 (t1+t2), t1 again in P2
+    # Monday block: two teachers in P1 (t1+t2), each holding TWO rows —
+    # teacher name on both, one student per row, second row empty
     assert ws.cell(row=2, column=1).value == "7/27(月)"
-    p1 = {(ws.cell(row=r, column=2).value, ws.cell(row=r, column=3).value)
-          for r in (2, 3)}
-    assert p1 == {("田中", "葵"), ("鈴木", "蓮")}
-    # n_sub = 2 -> Wednesday block starts at row 4; its date is merged
-    assert ws.cell(row=4, column=1).value == "7/29(水)"
+    p1 = [(ws.cell(row=r, column=2).value,
+           ws.cell(row=r, column=3).value or "")
+          for r in (2, 3, 4, 5)]
+    assert sorted(p1) == [("田中", ""), ("田中", "葵"),
+                          ("鈴木", ""), ("鈴木", "蓮")]
+    # both rows of a teacher's block share that teacher's color fill
+    from app.print_pdf import teacher_fill_rgb
+    for r in (2, 3, 4, 5):
+        tid = "t1" if ws.cell(row=r, column=2).value == "田中" else "t2"
+        rr, gg, bb = teacher_fill_rgb(tid)
+        assert ws.cell(row=r, column=2).fill.fgColor.rgb == \
+            f"00{rr:02X}{gg:02X}{bb:02X}"
+        assert ws.cell(row=r, column=3).fill.fgColor.rgb == \
+            ws.cell(row=r, column=2).fill.fgColor.rgb
+    # 2 teachers x 2 rows -> Wednesday block starts at row 6; merged date
+    assert ws.cell(row=6, column=1).value == "7/29(水)"
     assert str(ws.merged_cells.ranges).count("A") >= 1
     # subjects/rooms appear nowhere
     texts = [str(c.value) for row in ws.iter_rows() for c in row if c.value]

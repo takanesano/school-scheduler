@@ -2,9 +2,10 @@
 
 Same layout as the PDF overview handout (`print_pdf.overview_pdf`):
 one block of rows per in-term day, one column pair per period
-(teacher | students), a fixed number of teacher sub-rows everywhere.
-Pure module: consumes the views.py week-grid shape plus metadata and
-returns the workbook bytes — no DB, no FastAPI.
+(teacher | student), each teacher holding TWO sub-rows — one student
+per row, the second left empty for a single student — tinted with the
+teacher's UI color. Pure module: consumes the views.py week-grid shape
+plus metadata and returns the workbook bytes — no DB, no FastAPI.
 """
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from .print_pdf import WEEKDAY_JA, _circled, term_label
+from .print_pdf import WEEKDAY_JA, _circled, teacher_fill_rgb, term_label
 
 THIN = Side(style="thin", color="BBBBBB")
 MEDIUM = Side(style="medium", color="000000")
@@ -62,6 +63,11 @@ def _header_cell(cell) -> None:
     cell.alignment = Alignment(horizontal="center", vertical="center")
 
 
+def _teacher_fill(teacher_id: str) -> PatternFill:
+    r, g, b = teacher_fill_rgb(teacher_id)
+    return PatternFill("solid", fgColor=f"{r:02X}{g:02X}{b:02X}")
+
+
 def overview_xlsx(view: dict, generated_at: str) -> bytes:
     wb = Workbook()
     ws = wb.active
@@ -70,6 +76,12 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
     days, periods, label_of = _days_periods_labels(view)
     n_sub = max((len(s["entries"]) for d in days for s in d["slots"]),
                 default=1) or 1
+    # sub-rows per teacher block: 2 by design (one student per row,
+    # capacity 2), stretched only if some teacher ever has more
+    rows_per = max([2] + [len(t["lessons"])
+                          for d in days for s in d["slots"]
+                          for t in s["entries"]])
+    day_rows = n_sub * rows_per
 
     # ---- header row: 日付 | ① 09:00-10:10 (merged over 2 cols) | …
     ws.cell(row=1, column=1, value="日付")
@@ -83,13 +95,13 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
                        end_row=1, end_column=c0 + 1)
         _header_cell(ws.cell(row=1, column=c0, value=head))
 
-    # ---- one block of n_sub rows per day
+    # ---- one block of day_rows rows per day (rows_per per teacher)
     r = 2
     for day in days:
         d = dt.date.fromisoformat(day["date"])
         wd = day["weekday"]
         ws.merge_cells(start_row=r, start_column=1,
-                       end_row=r + n_sub - 1, end_column=1)
+                       end_row=r + day_rows - 1, end_column=1)
         date_cell = ws.cell(row=r, column=1,
                             value=f"{d.month}/{d.day}({WEEKDAY_JA[wd]})")
         date_cell.alignment = Alignment(horizontal="center",
@@ -102,24 +114,33 @@ def overview_xlsx(view: dict, generated_at: str) -> bytes:
         for i, p in enumerate(periods):
             c0 = 2 + i * 2
             slot = slots.get(p)
-            for k in range(n_sub):
-                tcell = ws.cell(row=r + k, column=c0)
-                scell = ws.cell(row=r + k, column=c0 + 1)
+            for row in range(day_rows):
+                tcell = ws.cell(row=r + row, column=c0)
+                scell = ws.cell(row=r + row, column=c0 + 1)
                 if slot is None:
                     tcell.fill = GREY
                     scell.fill = GREY
-                elif k < len(slot["entries"]):
+                    continue
+                k, j = divmod(row, rows_per)   # teacher block, sub-row
+                if k < len(slot["entries"]):
                     t = slot["entries"][k]
+                    fill = _teacher_fill(
+                        t.get("teacher_id", t["teacher_name"]))
+                    tcell.fill = fill
+                    scell.fill = fill
+                    # the teacher's name on EVERY row of their block,
+                    # ONE student per row (second row empty when the
+                    # teacher has a single student)
                     tcell.value = t["teacher_name"]
-                    scell.value = "、".join(
-                        l["student_name"] for l in t["lessons"])
-        r += n_sub
+                    if j < len(t["lessons"]):
+                        scell.value = t["lessons"][j]["student_name"]
+        r += day_rows
 
     # ---- borders: thin inside a day×period cell, medium around it
     last_row = r - 1
     for row in range(2, last_row + 1):
-        block_top = (row - 2) % n_sub == 0
-        block_bottom = (row - 2) % n_sub == n_sub - 1
+        block_top = (row - 2) % day_rows == 0
+        block_bottom = (row - 2) % day_rows == day_rows - 1
         ws.cell(row=row, column=1).border = Border(
             left=MEDIUM, right=MEDIUM,
             top=MEDIUM if block_top else THIN,
