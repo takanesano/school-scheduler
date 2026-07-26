@@ -206,11 +206,29 @@ def test_import_needs_full_pipeline(conn):
     ("students", "id,name\ns1,Aoi\ns2,Ren\n"),
     ("rooms", "id,name,capacity,teacher_capacity\nr1,Room 1,2,6\n"),
     ("teachers", "id,name,max_lessons_per_day\nt1,Tanaka,4\n"),
-    ("timeslots", "id,date,period,label\nmon-1,2026-07-27,1,17:00\n"),
+    ("timeslots",
+     "id,date,period,label,penalty\nmon-1,2026-07-27,1,17:00,3\n"),
 ])
 def test_export_round_trip(conn, entity, csv_text):
     csv_io.import_csv(conn, entity, csv_text)
     assert csv_io.export_csv(conn, entity) == csv_text
+
+
+def test_timeslots_csv_without_penalty_column_defaults_to_zero(conn):
+    """Pre-penalty timeslot CSVs (and files exported by older versions)
+    still import; the column defaults to 0 = no penalty."""
+    n = csv_io.import_csv(conn, "timeslots",
+                          "id,date,period,label\nmon-1,2026-07-27,1,17:00\n")
+    assert n == 1
+    assert rows(conn, "timeslots") == [("mon-1", "2026-07-27", 1, "17:00", 0)]
+
+
+def test_timeslots_csv_rejects_bad_penalty(conn):
+    with pytest.raises(csv_io.CsvError) as e:
+        csv_io.parse_csv("timeslots",
+                         "id,date,period,label,penalty\n"
+                         "mon-1,2026-07-27,1,,-2\n")
+    assert "penalty" in str(e.value)
 
 
 def test_export_handles_commas_and_quotes(conn):

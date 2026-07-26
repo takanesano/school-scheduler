@@ -97,6 +97,9 @@ class TimeslotIn(BaseModel):
     date: str          # ISO YYYY-MM-DD
     period: int = Field(ge=1)
     label: str = ""
+    # soft cost per lesson in this slot; 0 = none. None on POST keeps
+    # the stored value, so edits that omit it never reset a penalty.
+    penalty: int | None = Field(default=None, ge=0, le=99)
 
 
 class LinkIn(BaseModel):
@@ -199,10 +202,13 @@ def upsert_timeslot(item: TimeslotIn, conn: sqlite3.Connection = Depends(get_con
     try:
         with conn:
             conn.execute(
-                "INSERT INTO timeslots (id, date, period, label) VALUES (?, ?, ?, ?) "
+                "INSERT INTO timeslots (id, date, period, label, penalty) "
+                "VALUES (?, ?, ?, ?, COALESCE(?, 0)) "
                 "ON CONFLICT(id) DO UPDATE SET date=excluded.date, "
-                "period=excluded.period, label=excluded.label",
-                (item.id, item.date, item.period, item.label))
+                "period=excluded.period, label=excluded.label, "
+                "penalty=COALESCE(?, penalty)",
+                (item.id, item.date, item.period, item.label,
+                 item.penalty, item.penalty))
     except sqlite3.IntegrityError:
         raise HTTPException(409, f"A timeslot for {item.date} period {item.period} already exists")
     return {"ok": True}
@@ -670,8 +676,10 @@ def load_dataset(conn: sqlite3.Connection) -> Dataset:
             "SELECT id, name, capacity, teacher_capacity FROM rooms"):
         data.rooms[r["id"]] = Room(r["id"], r["name"], r["capacity"],
                                    r["teacher_capacity"])
-    for r in conn.execute("SELECT id, date, period, label FROM timeslots"):
-        data.timeslots[r["id"]] = Timeslot(r["id"], r["date"], r["period"], r["label"])
+    for r in conn.execute(
+            "SELECT id, date, period, label, penalty FROM timeslots"):
+        data.timeslots[r["id"]] = Timeslot(r["id"], r["date"], r["period"],
+                                           r["label"], r["penalty"])
     for r in conn.execute("SELECT teacher_id, subject_id FROM teacher_subjects"):
         data.teacher_subjects.add((r["teacher_id"], r["subject_id"]))
     for r in conn.execute(
@@ -914,7 +922,7 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
     sstats = student_day_stats(data, lessons)
     s = get_settings(conn)
     (double_days, gap_days, pair_miss, slot_spread, total_days,
-     single_days, day_spread) = schedule_objective(
+     single_days, day_spread, slot_penalty) = schedule_objective(
         data, lessons, single_day_max=s["single_day_max"])
     return {
         "lessons": [l.__dict__ for l in lessons],
@@ -934,7 +942,8 @@ def get_schedule(conn: sqlite3.Connection = Depends(get_conn)):
                       "pair_miss": pair_miss,
                       "slot_spread": slot_spread, "total_days": total_days,
                       "teacher_single_days": single_days,
-                      "day_spread": day_spread},
+                      "day_spread": day_spread,
+                      "slot_penalty": slot_penalty},
         "undo": _undo_info(conn),
     }
 

@@ -9,6 +9,7 @@ const OBJ_LABELS = {
   teacher_working_day: "Few teacher working days",
   teacher_single_day: "Few teacher days with too few lessons",
   teacher_day_spread: "Even working-day counts across teachers",
+  slot_penalty: "Avoid penalized timeslots",
 };
 
 const state = { tab: "schedule", keep: false, caution: true,
@@ -616,15 +617,34 @@ async function renderTimeslots(root) {
       <button class="action" id="add">Add / update</button>
     </div>
     <p class="muted">Each timeslot is one period on one concrete calendar
-      date — every day of the term is unique.</p>
+      date — every day of the term is unique. Penalty = points each
+      lesson placed in the slot costs (0 = none) — the solvers avoid
+      penalized slots via the "${esc(OBJ_LABELS.slot_penalty
+        || "Lessons in penalized timeslots")}" condition.</p>
     <table><thead><tr><th>ID</th><th>Date</th><th></th><th>Period</th>
-      <th>Label</th><th></th></tr></thead>
+      <th>Label</th><th>Penalty</th><th></th></tr></thead>
     <tbody></tbody></table></div>`);
   const tbody = $("tbody", panel);
   for (const r of rows) {
     const tr = el(`<tr><td>${esc(r.id)}</td><td>${r.date}</td>
       <td>${weekdayOf(r.date)}</td><td>${r.period}</td>
-      <td>${esc(r.label)}</td><td><button class="small">delete</button></td></tr>`);
+      <td>${esc(r.label)}</td>
+      <td><input type="number" min="0" max="99" class="inline-num"
+        value="${r.penalty}" data-penalty
+        title="points per lesson in this slot; 0 = no penalty"></td>
+      <td><button class="small">delete</button></td></tr>`);
+    $("input[data-penalty]", tr).onchange = async (e) => {
+      const v = parseInt(e.target.value, 10);
+      if (!(v >= 0 && v <= 99)) {
+        return toast("penalty must be 0-99", true);
+      }
+      try {
+        await api("POST", "/api/timeslots",
+          { id: r.id, date: r.date, period: r.period, label: r.label,
+            penalty: v });
+        render();
+      } catch (e2) { toast(e2.message, true); render(); }
+    };
     $("button", tr).onclick = async () => {
       if (!await appConfirm(`Delete timeslot ${r.id}?`, "Delete")) return;
       await api("DELETE", `/api/timeslots/${encodeURIComponent(r.id)}`).catch(e => toast(e.message, true));
@@ -915,7 +935,7 @@ const CSV_ENTITIES = [
   ["teachers", "id,name,max_lessons_per_day"],
   ["subjects", "id,name"],
   ["rooms", "id,name,capacity,teacher_capacity"],
-  ["timeslots", "id,date,period,label"],
+  ["timeslots", "id,date,period,label,penalty"],
   ["teacher_subjects", "teacher_id,subject_id"],
   ["teacher_students", "teacher_id,student_id,priority"],
   ["student_needs", "student_id,subject_id,sessions"],
@@ -1508,7 +1528,8 @@ async function renderSchedule(root) {
         total teacher working days: ${o.total_days} ·
         teacher days with ≤${settings.single_day_max}
         lesson${settings.single_day_max > 1 ? "s" : ""}: ${o.teacher_single_days} ·
-        day-count spread: ${o.day_spread}</p></div>`);
+        day-count spread: ${o.day_spread} ·
+        timeslot penalty points: ${o.slot_penalty ?? 0}</p></div>`);
     status.append(wl);
   }
 

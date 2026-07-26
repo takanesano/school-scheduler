@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS timeslots (
     date   TEXT NOT NULL,               -- ISO YYYY-MM-DD
     period INTEGER NOT NULL,
     label  TEXT NOT NULL DEFAULT '',
+    -- soft cost per lesson scheduled here; 0 = no penalty
+    penalty INTEGER NOT NULL DEFAULT 0 CHECK (penalty >= 0),
     UNIQUE (date, period)
 );
 
@@ -143,6 +145,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE teachers ADD COLUMN max_lessons_per_day "
                      "INTEGER NOT NULL DEFAULT 0 "
                      "CHECK (max_lessons_per_day >= 0)")
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(timeslots)")}
+    if "penalty" not in cols:
+        conn.execute("ALTER TABLE timeslots ADD COLUMN penalty "
+                     "INTEGER NOT NULL DEFAULT 0 CHECK (penalty >= 0)")
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(lessons)")}
     if "locked" not in cols:
         conn.execute("ALTER TABLE lessons ADD COLUMN locked "

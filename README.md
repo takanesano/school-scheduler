@@ -80,10 +80,13 @@ every two-lesson day with its date, plus all four metrics — so each
 objective can be checked at a glance.
 
 The Generate panel shows all rules as **one list**. Locked cards at the
-top are the built-in hard constraints. Below them, the seven conditions —
+top are the built-in hard constraints. Below them, the eight conditions —
 one lesson per day per student, multiple-lessons-must-be-consecutive,
-and the four teacher-workload objectives (including "few teacher days
-with at most N lessons", where N is edited on the card) — are
+the four teacher-workload objectives (including "few teacher days
+with at most N lessons", where N is edited on the card), the
+assigned-teacher preference, and **"Avoid penalized timeslots"**
+(each timeslot can carry a penalty score on the Timeslots tab;
+every lesson placed in such a slot costs that many points) — are
 draggable cards whose
 order is the lexicographic priority both solvers optimize
 (1 = most important). The consecutiveness condition starts at priority 0
@@ -225,7 +228,11 @@ solver prices the points directly in its objective.
   teachable subjects and a clickable teacher × subject matrix to edit them.
   The Timeslots tab has a **mass-add** form: pick a date range, weekdays,
   and periods (with time labels) to create a whole term's slots at once;
-  existing (date, period) pairs are skipped, never overwritten.
+  existing (date, period) pairs are skipped, never overwritten. Each
+  timeslot row also has a **penalty** field (0 = none): a slot with a
+  penalty is avoided by both solvers — every lesson placed there costs
+  that many points under the "Avoid penalized timeslots" condition,
+  which is draggable (and cappable) like any other rule.
 - **Student needs** tab — an editable student × subject matrix: type
   the session count straight into a cell (saved immediately; blank or
   0 removes the need), with a per-student total column — plus which
@@ -274,7 +281,7 @@ student also removes their availability, needs, and lessons).
 | `teachers.csv` | `id,name,max_lessons_per_day` (max_lessons_per_day optional: daily lesson cap, 0 = no limit) |
 | `subjects.csv` | `id,name` |
 | `rooms.csv` | `id,name,capacity,teacher_capacity` (teacher_capacity optional: max distinct teachers per timeslot, 0 = no limit) |
-| `timeslots.csv` | `id,date,period,label` (date: `YYYY-MM-DD`; label optional, e.g. `09:00-10:10`) |
+| `timeslots.csv` | `id,date,period,label,penalty` (date: `YYYY-MM-DD`; label optional, e.g. `09:00-10:10`; penalty optional 0-99, points each lesson in the slot costs, 0 = none) |
 | `teacher_subjects.csv` | `teacher_id,subject_id` |
 | `teacher_students.csv` | `teacher_id,student_id,priority` (priority optional: 0 = must, 1-9 = soft preference, default 1) |
 | `student_needs.csv` | `student_id,subject_id,sessions` (total over the term) |

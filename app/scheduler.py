@@ -51,6 +51,7 @@ class Timeslot:
     date: str          # ISO YYYY-MM-DD — each calendar day is unique
     period: int
     label: str = ""
+    penalty: int = 0   # soft cost per lesson placed here; 0 = none
 
 
 @dataclass(frozen=True)
@@ -505,19 +506,21 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
         for i, s in enumerate(slot_ids):
             if (st, s) not in data.student_availability:
                 continue
-            # prefer days where the student has no lesson yet (soft O1)
+            # prefer days where the student has no lesson yet (soft O1),
+            # then unpenalized slots (soft slot_penalty term)
             busy_day = bool(state.student_day[(st, data.timeslots[s].date)])
+            pen = data.timeslots[s].penalty
             for t in ranked:
                 if (t, s) not in data.teacher_availability:
                     continue
                 for r in room_ids:
                     if state.fits(st, su, t, r, s):
-                        opts.append((busy_day, i, s, t, r))
+                        opts.append((busy_day, pen, i, s, t, r))
                         break  # one room per (slot, teacher) is enough
             if limit is not None and len(opts) >= limit:
                 break
-        opts.sort(key=lambda x: (x[0], x[1]))
-        return [(s, t, r) for (_, _, s, t, r) in opts]
+        opts.sort(key=lambda x: (x[0], x[1], x[2]))
+        return [(s, t, r) for (_, _, _, s, t, r) in opts]
 
     placed: list[Lesson] = []
     nodes = 0
@@ -694,7 +697,8 @@ def student_double_days(data: Dataset, lessons: list[Lesson]) -> int:
 OBJECTIVE_TERMS = ("student_double_day", "student_day_gap",
                    "student_teacher_pair",
                    "teacher_slot_spread", "teacher_working_day",
-                   "teacher_single_day", "teacher_day_spread")
+                   "teacher_single_day", "teacher_day_spread",
+                   "slot_penalty")
 
 OBJECTIVE_LABELS = {
     "student_double_day": "Student days with two or more lessons",
@@ -704,6 +708,7 @@ OBJECTIVE_LABELS = {
     "teacher_working_day": "Total teacher working days",
     "teacher_single_day": "Teacher days with too few lessons",
     "teacher_day_spread": "Working-day spread between teachers",
+    "slot_penalty": "Lessons in penalized timeslots",
 }
 
 
@@ -734,6 +739,14 @@ def pair_miss_points(data: Dataset, lessons: list[Lesson]) -> int:
         if ts and l.teacher_id not in ts:
             pts += 10 - strength.get(l.student_id, 9)
     return pts
+
+
+def slot_penalty_points(data: Dataset, lessons: list[Lesson]) -> int:
+    """Soft timeslot term: each lesson costs its timeslot's ``penalty``
+    points (0 = free). Lets a school mark late-evening / auxiliary
+    periods as to-be-avoided without forbidding them."""
+    return sum(data.timeslots[l.timeslot_id].penalty
+               for l in lessons if l.timeslot_id in data.timeslots)
 
 
 def teacher_single_days(data: Dataset, lessons: list[Lesson],
@@ -782,6 +795,7 @@ def objective_term_values(data: Dataset,
             teacher_single_days(data, lessons, at_most=single_day_max),
         "teacher_day_spread":
             (max(day_counts) - min(day_counts)) if day_counts else 0,
+        "slot_penalty": slot_penalty_points(data, lessons),
     }
 
 

@@ -24,7 +24,7 @@ SPECS: dict[str, list[str]] = {
     "teachers": ["id", "name", "max_lessons_per_day"],
     "subjects": ["id", "name"],
     "rooms": ["id", "name", "capacity", "teacher_capacity"],
-    "timeslots": ["id", "date", "period", "label"],
+    "timeslots": ["id", "date", "period", "label", "penalty"],
     "teacher_subjects": ["teacher_id", "subject_id"],
     "teacher_students": ["teacher_id", "student_id", "priority"],
     "student_needs": ["student_id", "subject_id", "sessions"],
@@ -37,7 +37,7 @@ OPTIONAL: dict[str, set[str]] = {
     "rooms": {"capacity", "teacher_capacity"},
     "teachers": {"max_lessons_per_day"},   # 0 = no daily limit
     "teacher_students": {"priority"},      # defaults to 1 (soft)
-    "timeslots": {"label"},     # defaults to ''
+    "timeslots": {"label", "penalty"},   # default '' / 0 = no penalty
 }
 
 # columns that must reference another table: col -> referenced entity
@@ -82,7 +82,7 @@ def parse_csv(entity: str, text: str) -> list[dict[str, str]]:
                 val = {"capacity": "1", "label": "",
                        "teacher_capacity": "0",
                        "max_lessons_per_day": "0",
-                       "priority": "1"}[c]
+                       "priority": "1", "penalty": "0"}[c]
             if not val and c not in optional:
                 errors.append(f"Line {lineno}: '{c}' is empty")
                 row_ok = False
@@ -121,6 +121,12 @@ def parse_csv(entity: str, text: str) -> list[dict[str, str]]:
             errors.append(f"Line {lineno}: priority must be 0-9 "
                           f"(0 = must, 1-9 = soft preference), got "
                           f"'{out['priority']}'")
+            continue
+        if "penalty" in out and not (
+                _is_nonneg_int(out["penalty"])
+                and int(out["penalty"]) <= 99):
+            errors.append(f"Line {lineno}: penalty must be 0-99 "
+                          f"(0 = no penalty), got '{out['penalty']}'")
             continue
         if "date" in out and not _is_iso_date(out["date"]):
             errors.append(f"Line {lineno}: date must be YYYY-MM-DD "
