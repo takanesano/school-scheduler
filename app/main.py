@@ -929,7 +929,7 @@ def repeat_lessons(body: RepeatIn,
                 skipped_duplicate += 1
                 continue
             seen.add(key)
-            new.append(Lesson(*key))
+            new.append(Lesson(*key, locked=src.locked))
 
     new_violations = []
     if new:
@@ -943,9 +943,9 @@ def repeat_lessons(body: RepeatIn,
         with conn:
             conn.executemany(
                 "INSERT INTO lessons (student_id, subject_id, teacher_id, "
-                "room_id, timeslot_id) VALUES (?, ?, ?, ?, ?)",
+                "room_id, timeslot_id, locked) VALUES (?, ?, ?, ?, ?, ?)",
                 [(l.student_id, l.subject_id, l.teacher_id, l.room_id,
-                  l.timeslot_id) for l in new])
+                  l.timeslot_id, int(l.locked)) for l in new])
     return {"ok": True, "created": len(new),
             "skipped_no_slot": skipped_no_slot,
             "skipped_duplicate": skipped_duplicate,
@@ -1125,6 +1125,31 @@ def check_lesson_options(lesson_id: int, opts: OptionsIn,
 
 class LockIn(BaseModel):
     locked: bool
+
+
+class BulkLockIn(BaseModel):
+    lesson_ids: list[int] = Field(min_length=1)
+    locked: bool
+
+
+@app.post("/api/lessons/bulk_lock")
+def bulk_lock_lessons(body: BulkLockIn,
+                      conn: sqlite3.Connection = Depends(get_conn)):
+    """Lock or unlock several lessons in one transaction."""
+    qs = ",".join("?" for _ in body.lesson_ids)
+    found = {r["id"] for r in conn.execute(
+        f"SELECT id FROM lessons WHERE id IN ({qs})",  # noqa: S608
+        body.lesson_ids)}
+    missing = [i for i in body.lesson_ids if i not in found]
+    if missing:
+        raise HTTPException(
+            404, f"No such lesson(s): {', '.join(map(str, missing))}")
+    with conn:
+        conn.execute(
+            f"UPDATE lessons SET locked = ? WHERE id IN ({qs})",  # noqa: S608
+            [int(body.locked)] + body.lesson_ids)
+    return {"ok": True, "locked": body.locked,
+            "count": len(body.lesson_ids)}
 
 
 @app.post("/api/lessons/{lesson_id}/lock")

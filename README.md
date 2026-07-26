@@ -149,7 +149,9 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   **Select lessons…** turns on selection mode: click cards to select
   several lessons, or **drag a rectangle over the timetable** to add
   every lesson it touches (the page scrolls itself at the viewport
-  edge; the selection survives leaving the mode), then
+  edge; the selection survives leaving the mode) — or hit **Select
+  all** (respects the filter). **🔒 Lock selected / 🔓 Unlock
+  selected** flips the lock on the whole selection at once. Then
   **repeat them over the next N weeks** — each copy lands on the same
   weekday and period with the same student, subject, teacher and room
   — or **change the subject / teacher / room of all selected lessons
