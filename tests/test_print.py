@@ -125,8 +125,9 @@ def test_overview_xlsx_structure():
 
 
 def test_batch_xlsx_one_sheet_per_person():
-    """students/teachers workbooks carry one worksheet per person with
-    the transposed day×period layout."""
+    """The students workbook carries one CALENDAR sheet per student
+    (Mon-Sun columns; per week: date / subjects / 1限-style periods);
+    the teachers workbook keeps the transposed day×period layout."""
     import io
 
     from openpyxl import load_workbook
@@ -137,10 +138,16 @@ def test_batch_xlsx_one_sheet_per_person():
     wb = load_workbook(io.BytesIO(students_xlsx(sv, STAMP)))
     assert wb.sheetnames == ["葵 (s1)", "蓮 (s2)"]
     ws = wb["蓮 (s2)"]
-    assert ws.cell(row=1, column=2).value.startswith("①")
-    assert ws.cell(row=2, column=1).value == "7/27(月)"
-    assert ws.cell(row=2, column=2).value == "英語(鈴木)"   # s2 Mon P1
-    assert ws.cell(row=3, column=2).value == "数学(田中)"   # s2 Wed P1
+    assert [ws.cell(row=1, column=c).value for c in range(1, 8)] == \
+        list("月火水木金土日")
+    # Monday column: date, subject row, period row
+    assert ws.cell(row=2, column=1).value == "7/27"
+    assert ws.cell(row=3, column=1).value == "英語"        # s2 Mon P1
+    assert ws.cell(row=4, column=1).value == "1限"
+    # Wednesday column of the same week block
+    assert ws.cell(row=2, column=3).value == "7/29"
+    assert ws.cell(row=3, column=3).value == "数学"        # s2 Wed P1
+    assert ws.cell(row=4, column=3).value == "1限"
 
     tv = [build_teacher_view(d, LESSONS, t) for t in ("t1", "t2")]
     wb = load_workbook(io.BytesIO(teachers_xlsx(tv, STAMP)))

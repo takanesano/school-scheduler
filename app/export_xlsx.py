@@ -241,6 +241,51 @@ def _person_sheet(ws, view: dict, generated_at: str, cell_text) -> None:
     _page_setup(ws, view, generated_at)
 
 
+def _calendar_sheet(ws, view: dict, generated_at: str,
+                    cell_rows) -> None:
+    """One month-style calendar: Mon-Sun columns, THREE rows per week —
+    date / top content / bottom content. ``cell_rows(day_cell) ->
+    (top, bottom)`` renders one day (both empty strings = free day)."""
+    for i, wd in enumerate("月火水木金土日"):
+        _header_cell(ws.cell(row=1, column=1 + i, value=wd))
+    r = 2
+    for week in view["weeks"]:
+        for i, cell in enumerate(week):
+            d = dt.date.fromisoformat(cell["date"])
+            date_cell = ws.cell(row=r, column=1 + i,
+                                value=f"{d.month}/{d.day}")
+            wd = cell["weekday"]
+            if wd == "Sun":
+                date_cell.font = SUN
+            elif wd == "Sat":
+                date_cell.font = SAT
+            if not cell["in_term"]:
+                for rr in range(r, r + 3):
+                    ws.cell(row=rr, column=1 + i).fill = GREY
+                continue
+            top, bottom = cell_rows(cell)
+            if top:
+                ws.cell(row=r + 1, column=1 + i, value=top)
+            if bottom:
+                ws.cell(row=r + 2, column=1 + i, value=bottom)
+        r += 3
+    # borders: medium around each day cell, thin between its 3 rows
+    last_row = r - 1
+    for row in range(2, last_row + 1):
+        pos = (row - 2) % 3                      # 0 date, 1 top, 2 bottom
+        for col in range(1, 8):
+            ws.cell(row=row, column=col).border = Border(
+                left=MEDIUM, right=MEDIUM,
+                top=MEDIUM if pos == 0 else THIN,
+                bottom=MEDIUM if pos == 2 else THIN)
+    for col in range(1, 8):
+        ws.cell(row=1, column=col).border = Border(
+            left=MEDIUM, right=MEDIUM, top=MEDIUM, bottom=MEDIUM)
+        ws.column_dimensions[get_column_letter(col)].width = 16
+    _page_setup(ws, view, generated_at)
+    ws.freeze_panes = "A2"                       # no sticky name column
+
+
 def _batch_xlsx(views: list[dict], generated_at: str,
                 title_of, cell_text) -> bytes:
     if not views:
@@ -255,15 +300,32 @@ def _batch_xlsx(views: list[dict], generated_at: str,
     return buf.getvalue()
 
 
+def _student_cell_rows(cell: dict) -> tuple[str, str]:
+    """Subjects on top, their periods (1限 style) below — comma-
+    delimited, aligned by lesson order (same as the student PDF)."""
+    entries = [(s["period"], e)
+               for s in cell["slots"] for e in s["entries"]]
+    entries.sort(key=lambda pe: pe[0])
+    return ("、".join(e["subject_name"] for _p, e in entries),
+            "、".join(f"{p}限" for p, _e in entries))
+
+
 def students_xlsx(views: list[dict], generated_at: str) -> bytes:
-    """One workbook, one worksheet per student; each slot cell shows
-    the subject and teacher (rooms omitted)."""
-    return _batch_xlsx(
-        views, generated_at,
-        lambda v: _sheet_title(v["student_name"], v["student_id"]),
-        lambda slot: "、".join(
-            f"{e['subject_name']}({e['teacher_name']})"
-            for e in slot["entries"]))
+    """One workbook, one CALENDAR worksheet per student: Mon-Sun
+    columns, and per week a date row, a subjects row (comma-delimited)
+    and a periods row (1限・2限 style) — the Excel twin of the student
+    PDF handout."""
+    if not views:
+        raise ValueError("nothing to export")
+    wb = Workbook()
+    wb.remove(wb.active)
+    for v in views:
+        ws = wb.create_sheet(
+            title=_sheet_title(v["student_name"], v["student_id"]))
+        _calendar_sheet(ws, v, generated_at, _student_cell_rows)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def teachers_xlsx(views: list[dict], generated_at: str) -> bytes:

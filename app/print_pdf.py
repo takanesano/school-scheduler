@@ -111,21 +111,20 @@ def _wrap(pdf: FPDF, text: str, width: float) -> list[str]:
 
 
 def _cell_lines(pdf: FPDF, cell: dict,
-                entry_lines) -> list[str]:
+                cell_lines) -> list[str]:
     """Wrapped content lines for one day cell."""
     pdf.set_font("noto", size=SIZE_BODY)
     lines: list[str] = []
-    for slot in cell["slots"]:
-        for raw in entry_lines(slot):
-            lines.extend(_wrap(pdf, raw, COL_W - 2 * CELL_PAD - 0.6))
+    for raw in cell_lines(cell):
+        lines.extend(_wrap(pdf, raw, COL_W - 2 * CELL_PAD - 0.6))
     return lines
 
 
 def _grid_pages(pdf: _HandoutPDF, view: dict, title: str,
-                entry_lines) -> None:
+                cell_lines) -> None:
     """Render one calendar (week rows × Mon-Sun) over as many pages as
-    needed. ``entry_lines(slot_cell) -> list[str]`` turns one timeslot
-    cell into compact text lines."""
+    needed. ``cell_lines(day_cell) -> list[str]`` turns one day cell
+    into compact text lines."""
     pdf.page_title = title
     pdf.add_page()
     top = MARGIN + HEADER_H
@@ -144,7 +143,7 @@ def _grid_pages(pdf: _HandoutPDF, view: dict, title: str,
 
     y = weekday_header(y)
     for week in view["weeks"]:
-        cells = [(c, _cell_lines(pdf, c, entry_lines)) for c in week]
+        cells = [(c, _cell_lines(pdf, c, cell_lines)) for c in week]
         row_h = max(DATE_H + len(ls) * LINE_H + 2 * CELL_PAD
                     for (_c, ls) in cells)
         row_h = max(row_h, 8.0)
@@ -212,16 +211,27 @@ def _slot_prefix(slot: dict) -> str:
     return f"{p}{label} " if label else f"{p} "
 
 
-def _student_lines(slot: dict) -> list[str]:
-    return [f"{_slot_prefix(slot)}{e['subject_name']} "
-            f"{e['teacher_name']} {e['room_name']}"
-            for e in slot["entries"]]
+def _student_cell_lines(cell: dict) -> list[str]:
+    """Two rows per day: subjects on top, their periods (1限 style)
+    below — comma-delimited, aligned by lesson order."""
+    entries = [(s["period"], e)
+               for s in cell["slots"] for e in s["entries"]]
+    if not entries:
+        return []
+    entries.sort(key=lambda pe: pe[0])
+    return ["、".join(e["subject_name"] for _p, e in entries),
+            "、".join(f"{p}限" for p, _e in entries)]
 
 
 def _teacher_lines(slot: dict) -> list[str]:
     return [f"{_slot_prefix(slot)}{e['subject_name']} "
             f"{e['student_name']}さん {e['room_name']}"
             for e in slot["entries"]]
+
+
+def _teacher_cell_lines(cell: dict) -> list[str]:
+    return [line for slot in cell["slots"]
+            for line in _teacher_lines(slot)]
 
 
 def term_label(view: dict) -> str:
@@ -417,7 +427,7 @@ def students_pdf(views: list[dict], generated_at: str) -> bytes:
     for v in views:
         pdf.term_label = term_label(v)
         _grid_pages(pdf, v, f"時間割(生徒用) {v['student_name']} さん",
-                    _student_lines)
+                    _student_cell_lines)
     return bytes(pdf.output())
 
 
@@ -429,5 +439,5 @@ def teachers_pdf(views: list[dict], generated_at: str) -> bytes:
     for v in views:
         pdf.term_label = term_label(v)
         _grid_pages(pdf, v, f"時間割(講師用) {v['teacher_name']}",
-                    _teacher_lines)
+                    _teacher_cell_lines)
     return bytes(pdf.output())
