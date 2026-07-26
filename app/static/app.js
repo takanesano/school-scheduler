@@ -15,7 +15,7 @@ const state = { tab: "schedule", keep: false, caution: true,
                 compress: true, exact: false, exactBudget: 8,
                 lastGen: null,
                 selectMode: false, selectedLessons: new Set(),
-                repeatWeeks: 4,
+                repeatWeeks: 4, gridClip: null,
                 objOrder: Object.keys(OBJ_LABELS),
                 hiddenTeachers: new Set(), hiddenStudents: new Set(),
                 filterSort: "name",
@@ -40,6 +40,88 @@ const TABS = [
 // Big people × slots grids: scroll inside the box with STICKY headers
 // (top row(s) and the name column stay visible), plus a hover
 // cross-highlight so a cell is easy to trace to its row and column.
+// Drag across data cells to select a rectangle (a plain click still
+// performs the cell's own action). onSel(rect) fires when a drag
+// finishes; rect is {r1,c1,r2,c2} in tbody-row / data-column
+// coordinates (the row-header column is excluded).
+function attachAreaSelect(table, onSel) {
+  let anchor = null;
+  let dragging = false;
+  let suppress = false;
+  let last = null;
+  const clear = () => {
+    for (const c of table.querySelectorAll(".area-sel")) {
+      c.classList.remove("area-sel");
+    }
+  };
+  const posOf = (t) => {
+    const td = t.closest ? t.closest("td") : null;
+    if (!td || td.cellIndex === 0 || !td.closest("tbody")) return null;
+    return { r: td.parentElement.sectionRowIndex, c: td.cellIndex - 1 };
+  };
+  const paint = (a, b) => {
+    clear();
+    const r1 = Math.min(a.r, b.r), r2 = Math.max(a.r, b.r);
+    const c1 = Math.min(a.c, b.c), c2 = Math.max(a.c, b.c);
+    const rows = table.tBodies[0].rows;
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        const cell = rows[r].cells[c + 1];
+        if (cell) cell.classList.add("area-sel");
+      }
+    }
+    return { r1, c1, r2, c2 };
+  };
+  let downXY = null;
+  table.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    const p = posOf(e.target);
+    if (!p) return;
+    suppress = false;
+    anchor = p;
+    last = p;
+    downXY = [e.clientX, e.clientY];
+    dragging = false;
+    document.addEventListener("mouseup", () => {
+      if (dragging) {
+        onSel(paint(anchor, last));
+        suppress = true;   // swallow the click that follows the drag
+      }
+      anchor = null;
+      dragging = false;
+    }, { once: true });
+  });
+  table.addEventListener("mouseover", (e) => {
+    if (!anchor) return;
+    const p = posOf(e.target);
+    if (!p) return;
+    last = p;
+    if (!dragging && (p.r !== anchor.r || p.c !== anchor.c)) {
+      dragging = true;
+    }
+    if (dragging) paint(anchor, p);
+  });
+  // a small wiggle INSIDE one cell also starts a selection, so a
+  // single cell can be selected (e.g. as a paste anchor); a clean
+  // click still runs the cell's own action
+  table.addEventListener("mousemove", (e) => {
+    if (!anchor || dragging || !downXY) return;
+    if (Math.abs(e.clientX - downXY[0])
+        + Math.abs(e.clientY - downXY[1]) > 5) {
+      dragging = true;
+      paint(anchor, last);
+    }
+  });
+  table.addEventListener("click", (e) => {
+    if (suppress) {
+      e.stopPropagation();
+      e.preventDefault();
+      suppress = false;
+    }
+  }, true);
+  return { clear };
+}
+
 let _gridSeq = 0;
 function enhanceGrid(wrap) {
   const table = $("table", wrap);
@@ -572,6 +654,80 @@ async function renderAvailGrid(root, title, people, entity, idCol, slots) {
     tbody.append(tr);
   }
   enhanceGrid($(".grid-scroll", panel));
+
+  // drag-select a rectangle -> bulk actions on the whole block
+  const bar = el(`<div class="row area-bar" hidden>
+    <span class="muted area-count"></span>
+    <button class="action secondary" data-act="on">✓ available</button>
+    <button class="action secondary" data-act="off">· unavailable</button>
+    <button class="action secondary" data-act="inv">invert</button>
+    <button class="action secondary" data-act="copy">copy</button>
+    <button class="action secondary" data-act="paste">paste</button>
+    <button class="action secondary" data-act="unsel">deselect</button>
+  </div>`);
+  panel.insertBefore(bar, $(".grid-scroll", panel));
+  let rect = null;
+  const selApi = attachAreaSelect($("table", panel), (r) => {
+    rect = r;
+    bar.hidden = false;
+    const n = (r.r2 - r.r1 + 1) * (r.c2 - r.c1 + 1);
+    $(".area-count", bar).textContent = `${n} cells`;
+    $('[data-act="paste"]', bar).disabled =
+      !(state.gridClip && state.gridClip.kind === "avail");
+  });
+  bar.onclick = async (e) => {
+    const b = e.target.closest("button");
+    if (!b || !rect) return;
+    const act = b.dataset.act;
+    if (act === "unsel") {
+      selApi.clear();
+      rect = null;
+      bar.hidden = true;
+      return;
+    }
+    if (act === "copy") {
+      const vals = [];
+      for (let r = rect.r1; r <= rect.r2; r++) {
+        const row = [];
+        for (let c = rect.c1; c <= rect.c2; c++) {
+          row.push(have.has(`${people[r].id}|${slots[c].id}`));
+        }
+        vals.push(row);
+      }
+      state.gridClip = { kind: "avail", vals };
+      toast(`Copied ${vals.length} × ${vals[0].length} cells`);
+      $('[data-act="paste"]', bar).disabled = false;
+      return;
+    }
+    const body = { add: [], remove: [] };
+    if (act === "paste") {
+      const clip = state.gridClip;
+      if (!clip || clip.kind !== "avail") return;
+      for (let i = 0; i < clip.vals.length; i++) {
+        for (let j = 0; j < clip.vals[i].length; j++) {
+          const r = rect.r1 + i, c = rect.c1 + j;
+          if (r >= people.length || c >= slots.length) continue;
+          (clip.vals[i][j] ? body.add : body.remove)
+            .push([people[r].id, slots[c].id]);
+        }
+      }
+    } else {
+      for (let r = rect.r1; r <= rect.r2; r++) {
+        for (let c = rect.c1; c <= rect.c2; c++) {
+          const pair = [people[r].id, slots[c].id];
+          const on = have.has(`${people[r].id}|${slots[c].id}`);
+          if (act === "on") body.add.push(pair);
+          else if (act === "off") body.remove.push(pair);
+          else (on ? body.remove : body.add).push(pair);
+        }
+      }
+    }
+    try {
+      const res = await api("POST", `/api/${entity}/bulk`, body);
+      toast(`Updated: ${res.added} available, ${res.removed} cleared`);
+      render();
+    } catch (e2) { toast(e2.message, true); }
+  };
   root.append(panel);
 }
 
@@ -1854,6 +2010,85 @@ async function renderAssignments(root) {
     return;
   }
   enhanceGrid($(".grid-scroll", panel));
+
+  // drag-select a rectangle -> assign/clear/copy/paste the whole block
+  const bar = el(`<div class="row area-bar" hidden>
+    <span class="muted area-count"></span>
+    <span class="muted">set all to:</span>
+    <button class="pair-badge pair-hard" data-prio="0">0</button>
+    <button class="pair-badge pair-soft" data-prio="1">1</button>
+    <button class="pair-badge pair-soft" data-prio="2">2</button>
+    <button class="pair-badge pair-soft" data-prio="3">3</button>
+    <button class="pair-badge pair-clear" data-prio="">✕</button>
+    <button class="action secondary" data-act="copy">copy</button>
+    <button class="action secondary" data-act="paste">paste</button>
+    <button class="action secondary" data-act="unsel">deselect</button>
+  </div>`);
+  panel.insertBefore(bar, $(".grid-scroll", panel));
+  let rect = null;
+  const selApi = attachAreaSelect($("table", panel), (r) => {
+    rect = r;
+    bar.hidden = false;
+    const n = (r.r2 - r.r1 + 1) * (r.c2 - r.c1 + 1);
+    $(".area-count", bar).textContent = `${n} cells`;
+    $('[data-act="paste"]', bar).disabled =
+      !(state.gridClip && state.gridClip.kind === "pair");
+  });
+  bar.onclick = async (e) => {
+    const b = e.target.closest("button");
+    if (!b || !rect) return;
+    if (b.dataset.act === "unsel") {
+      selApi.clear();
+      rect = null;
+      bar.hidden = true;
+      return;
+    }
+    if (b.dataset.act === "copy") {
+      const vals = [];
+      for (let r = rect.r1; r <= rect.r2; r++) {
+        const row = [];
+        for (let c = rect.c1; c <= rect.c2; c++) {
+          const k = prio.get(`${students[r].id}|${teachers[c].id}`);
+          row.push(k === undefined ? null : k);
+        }
+        vals.push(row);
+      }
+      state.gridClip = { kind: "pair", vals };
+      toast(`Copied ${vals.length} × ${vals[0].length} cells`);
+      $('[data-act="paste"]', bar).disabled = false;
+      return;
+    }
+    const body = { set: [], clear: [] };
+    if (b.dataset.act === "paste") {
+      const clip = state.gridClip;
+      if (!clip || clip.kind !== "pair") return;
+      for (let i = 0; i < clip.vals.length; i++) {
+        for (let j = 0; j < clip.vals[i].length; j++) {
+          const r = rect.r1 + i, c = rect.c1 + j;
+          if (r >= students.length || c >= teachers.length) continue;
+          const v = clip.vals[i][j];
+          if (v === null) body.clear.push([teachers[c].id, students[r].id]);
+          else body.set.push([teachers[c].id, students[r].id, v]);
+        }
+      }
+    } else if ("prio" in b.dataset) {
+      for (let r = rect.r1; r <= rect.r2; r++) {
+        for (let c = rect.c1; c <= rect.c2; c++) {
+          if (b.dataset.prio === "") {
+            body.clear.push([teachers[c].id, students[r].id]);
+          } else {
+            body.set.push([teachers[c].id, students[r].id,
+                           parseInt(b.dataset.prio, 10)]);
+          }
+        }
+      }
+    } else return;
+    try {
+      const res = await api("POST", "/api/teacher_students/bulk", body);
+      toast(`Updated: ${res.set} assigned, ${res.cleared} cleared`);
+      render();
+    } catch (e2) { toast(e2.message, true); }
+  };
   root.append(panel);
 }
 
