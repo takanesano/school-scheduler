@@ -838,11 +838,12 @@ async function renderAvailGrid(root, title, people, entity, idCol, slots) {
 
 const CSV_ENTITIES = [
   ["students", "id,name"],
-  ["teachers", "id,name"],
+  ["teachers", "id,name,max_lessons_per_day"],
   ["subjects", "id,name"],
-  ["rooms", "id,name,capacity"],
+  ["rooms", "id,name,capacity,teacher_capacity"],
   ["timeslots", "id,date,period,label"],
   ["teacher_subjects", "teacher_id,subject_id"],
+  ["teacher_students", "teacher_id,student_id,priority"],
   ["student_needs", "student_id,subject_id,sessions"],
   ["teacher_availability", "teacher_id,timeslot_id"],
   ["student_availability", "student_id,timeslot_id"],

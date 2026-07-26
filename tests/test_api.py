@@ -701,6 +701,34 @@ def test_bulk_teacher_students_set_and_clear(client):
         "set": [], "clear": [["t1"]]}).status_code == 422
 
 
+def test_teacher_students_csv_roundtrip(client):
+    """Assignments export/import through the CSV tab endpoints,
+    priorities included; import replaces the table's contents."""
+    seed_world(client)
+    client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
+    client.post("/api/teacher_students", json={
+        "teacher_id": "t1", "student_id": "s1", "priority": 0})
+    client.post("/api/teacher_students", json={
+        "teacher_id": "t2", "student_id": "s2", "priority": 3})
+    r = client.get("/api/export/teacher_students")
+    assert r.status_code == 200
+    assert r.text == ("teacher_id,student_id,priority\n"
+                      "t1,s1,0\nt2,s2,3\n")
+    # import a different set: it becomes the table's full contents
+    csv = "teacher_id,student_id,priority\nt2,s1,1\n"
+    r = client.post("/api/import/teacher_students",
+                    files={"file": ("a.csv", csv, "text/csv")})
+    assert r.status_code == 200 and r.json()["rows"] == 1
+    assert client.get("/api/teacher_students").json() == [
+        {"teacher_id": "t2", "student_id": "s1", "priority": 1}]
+    # invalid priority: all-or-nothing, nothing changes
+    bad = "teacher_id,student_id,priority\nt1,s1,10\n"
+    assert client.post("/api/import/teacher_students",
+                       files={"file": ("b.csv", bad, "text/csv")}
+                       ).status_code == 422
+    assert len(client.get("/api/teacher_students").json()) == 1
+
+
 def test_teacher_students_crud_and_hard_pair_flow(client):
     """The Assignments tab's API: upsert with priority, listing, delete;
     a priority-0 pair blocks manual adds by other teachers through the
