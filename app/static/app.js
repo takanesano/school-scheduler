@@ -2012,6 +2012,84 @@ async function renderSchedule(root) {
       state.reopenSlotAdd = null;
       if (target) openSlotAdd(target, target.dataset.slotId);
     }
+
+    // rubber-band selection (select mode): drag across the timetable
+    // to add every touched lesson card to the selection
+    let bandSuppress = false;
+    grid.addEventListener("mousedown", (e) => {
+      if (!state.selectMode || e.button !== 0) return;
+      if (e.target.closest("button, select, input, .slot-add")) return;
+      if (!e.target.closest(".cal-table")) return;
+      const docXY = (ev) => [ev.clientX + window.scrollX,
+                             ev.clientY + window.scrollY];
+      const start = docXY(e);
+      let band = null;
+      // cache card boxes in document coordinates once, so live hit
+      // testing is pure math even while the page auto-scrolls
+      const cards = [...grid.querySelectorAll(
+        ".lesson-card[data-lesson-id]")].map((c) => {
+        const r = c.getBoundingClientRect();
+        return { el: c, id: +c.dataset.lessonId,
+                 l: r.left + window.scrollX, t: r.top + window.scrollY,
+                 r: r.right + window.scrollX,
+                 b: r.bottom + window.scrollY };
+      });
+      const rectOf = (cur) => [
+        Math.min(start[0], cur[0]), Math.min(start[1], cur[1]),
+        Math.max(start[0], cur[0]), Math.max(start[1], cur[1])];
+      const hits = (cur) => {
+        const [x1, y1, x2, y2] = rectOf(cur);
+        return cards.filter(c =>
+          c.l < x2 && c.r > x1 && c.t < y2 && c.b > y1 && c.r > c.l);
+      };
+      const onMove = (ev) => {
+        const cur = docXY(ev);
+        if (!band) {
+          if (Math.abs(cur[0] - start[0])
+              + Math.abs(cur[1] - start[1]) < 6) return;
+          band = el(`<div class="select-band"></div>`);
+          document.body.append(band);
+          document.body.classList.add("banding");
+        }
+        const [x1, y1, x2, y2] = rectOf(cur);
+        Object.assign(band.style, {
+          left: `${x1}px`, top: `${y1}px`,
+          width: `${x2 - x1}px`, height: `${y2 - y1}px`,
+        });
+        const hit = new Set(hits(cur).map(c => c.id));
+        for (const c of cards) {
+          c.el.classList.toggle("selected",
+            hit.has(c.id) || state.selectedLessons.has(c.id));
+        }
+        // scroll the page when the cursor nears the viewport edge
+        const m = 45;
+        if (ev.clientY < m) window.scrollBy(0, -22);
+        else if (ev.clientY > window.innerHeight - m) {
+          window.scrollBy(0, 22);
+        }
+      };
+      const onUp = (ev) => {
+        document.removeEventListener("mousemove", onMove);
+        document.body.classList.remove("banding");
+        if (band) {
+          for (const c of hits(docXY(ev))) {
+            state.selectedLessons.add(c.id);
+          }
+          updateSelBar();
+          band.remove();
+          bandSuppress = true;   // swallow the trailing click
+        }
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp, { once: true });
+    });
+    grid.addEventListener("click", (e) => {
+      if (bandSuppress) {
+        e.stopPropagation();
+        e.preventDefault();
+        bandSuppress = false;
+      }
+    }, true);
   }
 
   // names in the Status workload tables jump to (and flash) the

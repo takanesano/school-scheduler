@@ -147,7 +147,9 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   generating (both solvers schedule around them), survive "Clear
   schedule", and refuse drags, edits and deletion until unlocked.
   **Select lessons…** turns on selection mode: click cards to select
-  several lessons (the selection survives leaving the mode), then
+  several lessons, or **drag a rectangle over the timetable** to add
+  every lesson it touches (the page scrolls itself at the viewport
+  edge; the selection survives leaving the mode), then
   **repeat them over the next N weeks** — each copy lands on the same
   weekday and period with the same student, subject, teacher and room
   — or **change the subject / teacher / room of all selected lessons
