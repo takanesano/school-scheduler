@@ -4,7 +4,6 @@ const $ = (sel, el = document) => el.querySelector(sel);
 const OBJ_LABELS = {
   student_double_day: "One lesson per day per student",
   student_day_gap: "Multiple lessons on a day must be consecutive",
-  student_teacher_pair: "Students taught by their assigned teacher",
   teacher_slot_spread: "Even lesson counts across teachers",
   teacher_working_day: "Few teacher working days",
   teacher_single_day: "Few teacher days with too few lessons",
@@ -1003,7 +1002,7 @@ const CSV_ENTITIES = [
   ["rooms", "id,name,capacity,teacher_capacity"],
   ["timeslots", "id,date,period,label,penalty"],
   ["teacher_subjects", "teacher_id,subject_id"],
-  ["teacher_students", "teacher_id,student_id,priority"],
+  ["student_subject_teachers", "student_id,subject_id,teacher_id"],
   ["student_needs", "student_id,subject_id,sessions"],
   ["teacher_availability", "teacher_id,timeslot_id"],
   ["student_availability", "student_id,timeslot_id"],
@@ -1191,7 +1190,6 @@ async function renderSchedule(root) {
   }
   const caps = settings.objective_caps || {};
   const CAP_DEFAULTS = { student_double_day: 0, student_day_gap: 0,
-                         student_teacher_pair: 0,
                          teacher_slot_spread: 1, teacher_working_day: 30,
                          teacher_single_day: 0, teacher_day_spread: 1 };
   let dragKey = null;
@@ -1589,7 +1587,6 @@ async function renderSchedule(root) {
       }</tbody></table></div>
       <p class="muted">Student days with two lessons: ${o.student_double_days} ·
         with non-consecutive lessons: ${o.student_day_gaps} ·
-        assigned-teacher miss points: ${o.pair_miss} ·
         lesson-count spread between teachers (max−min): ${o.slot_spread} ·
         total teacher working days: ${o.total_days} ·
         teacher days with ≤${settings.single_day_max}
@@ -2533,26 +2530,41 @@ async function gridUndoButton() {
 // ---------------------------------------------------------------- assignments
 
 async function renderAssignments(root) {
-  const [students, teachers, pairs] = await Promise.all([
-    list("students"), list("teachers"), list("teacher_students")]);
-  const prio = new Map(
-    pairs.map(p => [`${p.student_id}|${p.teacher_id}`, p.priority]));
+  const [students, subjects, teachers, tsubs, assigns, needs] =
+    await Promise.all([
+      list("students"), list("subjects"), list("teachers"),
+      list("teacher_subjects"), list("student_subject_teachers"),
+      list("student_needs")]);
+  const tname = Object.fromEntries(teachers.map(t => [t.id, t.name]));
+  const canTeach = {};                 // subject -> teacher ids
+  for (const ts of tsubs) (canTeach[ts.subject_id] ??= []).push(ts.teacher_id);
+  const assigned = new Map();          // "st|su" -> Set(teacher)
+  for (const a of assigns) {
+    const k = `${a.student_id}|${a.subject_id}`;
+    if (!assigned.has(k)) assigned.set(k, new Set());
+    assigned.get(k).add(a.teacher_id);
+  }
+  const needMap = new Map(
+    needs.map(n => [`${n.student_id}|${n.subject_id}`, n.sessions]));
+
+  if (!students.length || !subjects.length) {
+    root.append(el(`<div class="panel"><p class="muted">
+      Add students and subjects first.</p></div>`));
+    return;
+  }
 
   const panel = el(`<div class="panel">
-    <div class="tt-head"><h2>Teacher in charge</h2></div>
-    <p class="muted">Click a cell, then pick:
-      <span class="pair-badge pair-hard">0</span> = the student
-      <b>must</b> be taught by this teacher (hard rule);
-      <span class="pair-badge pair-soft">1</span>
-      <span class="pair-badge pair-soft">2</span>
-      <span class="pair-badge pair-soft">3</span> = preferred, other
-      teachers allowed but penalized (smaller number = stronger);
-      ✕ = no assignment. The soft preference's rank among the other
-      goals is the draggable "${esc(OBJ_LABELS.student_teacher_pair)}"
-      card in the Generate panel.</p>
+    <div class="tt-head"><h2>Assigned teachers</h2></div>
+    <p class="muted">Who teaches <b>which subject</b> to which student —
+      a hard rule: when a cell has assigned teachers, that student is
+      taught that subject <b>only by them</b> (both solvers obey it,
+      manual edits are checked). Empty cells are free — any teacher.
+      Click a cell to pick teachers; a teacher can be assigned to
+      several subjects of the same student. Greyed cells are subjects
+      the student currently has no sessions of.</p>
     <div class="grid-scroll"><table class="grid-table"><thead><tr>
-      <th></th>${teachers.map(t =>
-        `<th>${esc(t.name)}</th>`).join("")}</tr></thead>
+      <th></th>${subjects.map(su =>
+        `<th>${esc(su.name)}</th>`).join("")}</tr></thead>
     <tbody></tbody></table></div></div>`);
   let popEl = null;
   const closePop = () => { if (popEl) { popEl.remove(); popEl = null; } };
@@ -2561,55 +2573,81 @@ async function renderAssignments(root) {
   for (const st of students) {
     const tr = document.createElement("tr");
     tr.append(el(`<th>${esc(st.name)} (${esc(st.id)})</th>`));
-    for (const t of teachers) {
-      const key = `${st.id}|${t.id}`;
-      const k = prio.get(key);
-      const td = el(`<td class="pair-cell${
-        k === 0 ? " pair-hard" : k !== undefined ? " pair-soft" : ""}">${
-        k !== undefined ? k : "·"}</td>`);
-      td.title = k === 0
-        ? `${st.name} must be taught by ${t.name}`
-        : k !== undefined
-          ? `${t.name} preferred for ${st.name} (strength ${k})`
-          : `click to assign ${t.name} to ${st.name}`;
+    for (const su of subjects) {
+      const key = `${st.id}|${su.id}`;
+      const set = assigned.get(key);
+      const needed = needMap.has(key);
+      const names = set
+        ? [...set].map(t => tname[t] || t).sort().join(", ") : "";
+      const td = el(`<td class="assign-cell${set ? " assign-hard" : ""}${
+        needed ? "" : " assign-unneeded"}">${
+        names ? esc(names) : "·"}</td>`);
+      td.title = set
+        ? `${st.name}'s ${su.name}: only ${names}`
+        : `click to assign a teacher for ${st.name}'s ${su.name}`;
       td.onclick = (ev) => {
         ev.stopPropagation();
         closePop();
-        const pop = el(`<div class="pair-pop">
-          <button class="pair-badge pair-hard${k === 0 ? " active" : ""}"
-            data-v="0" title="must (hard rule)">0</button>
-          ${[1, 2, 3].map(v =>
-            `<button class="pair-badge pair-soft${k === v ? " active" : ""}"
-              data-v="${v}" title="preferred (strength ${v})">${v}</button>`
-          ).join("")}
-          <button class="pair-badge pair-clear" data-v=""
-            title="remove the assignment"${
-            k === undefined ? " disabled" : ""}>✕</button></div>`);
+        const pool = (canTeach[su.id] || [])
+          .slice().sort((a, b) =>
+            (tname[a] || a).localeCompare(tname[b] || b));
+        const pop = el(`<div class="assign-pop">${
+          pool.length ? pool.map(t => `<div class="assign-row">
+            <button class="assign-toggle${set && set.has(t) ? " on" : ""}"
+              data-t="${esc(t)}">${set && set.has(t) ? "✓ " : ""}${
+              esc(tname[t] || t)}</button>
+            <button class="assign-all" data-all="${esc(t)}"
+              title="assign ${esc(tname[t] || t)} to every subject
+ this student needs (that they can teach)">all subj.</button>
+          </div>`).join("")
+          : '<div class="muted">no teacher can teach this subject</div>'}
+          ${set ? '<button class="assign-clear" data-clear="1">clear cell</button>' : ""}
+        </div>`);
         pop.onclick = async (e2) => {
           e2.stopPropagation();
           const b = e2.target.closest("button");
-          if (!b || b.disabled) return;
+          if (!b) return;
           try {
-            if (b.dataset.v === "") {
-              await api("DELETE",
-                `/api/teacher_students?teacher_id=${encodeURIComponent(t.id)}`
-                + `&student_id=${encodeURIComponent(st.id)}`);
-            } else {
-              await api("POST", "/api/teacher_students",
-                { teacher_id: t.id, student_id: st.id,
-                  priority: parseInt(b.dataset.v, 10) });
-            }
+            if (b.dataset.clear) {
+              await api("POST", "/api/student_subject_teachers/bulk", {
+                add: [],
+                remove: [...set].map(t => [st.id, su.id, t]) });
+            } else if (b.dataset.all) {
+              const t = b.dataset.all;
+              const add = subjects
+                .filter(s2 => needMap.has(`${st.id}|${s2.id}`)
+                  && (canTeach[s2.id] || []).includes(t))
+                .map(s2 => [st.id, s2.id, t]);
+              if (!add.length) {
+                return toast("this student has no needed subject "
+                  + "that teacher can teach", true);
+              }
+              await api("POST", "/api/student_subject_teachers/bulk",
+                { add, remove: [] });
+            } else if (b.dataset.t) {
+              const t = b.dataset.t;
+              if (set && set.has(t)) {
+                await api("DELETE", "/api/student_subject_teachers"
+                  + `?student_id=${encodeURIComponent(st.id)}`
+                  + `&subject_id=${encodeURIComponent(su.id)}`
+                  + `&teacher_id=${encodeURIComponent(t)}`);
+              } else {
+                await api("POST", "/api/student_subject_teachers",
+                  { student_id: st.id, subject_id: su.id,
+                    teacher_id: t });
+              }
+            } else return;
             render();
           } catch (e3) { toast(e3.message, true); render(); }
         };
         td.append(pop);
-        // flip upward when the cell sits near the bottom of the
-        // scrolling grid box, so the chooser is never clipped
+        // flip upward near the bottom of the scrolling grid box
         const box = td.closest(".grid-scroll");
         if (box) {
           const r = td.getBoundingClientRect();
           const c = box.getBoundingClientRect();
-          if (r.bottom + 44 > c.bottom) pop.classList.add("up");
+          const h = 30 * (pool.length + 1) + 12;
+          if (r.bottom + h > c.bottom) pop.classList.add("up");
         }
         popEl = pop;
       };
@@ -2617,102 +2655,36 @@ async function renderAssignments(root) {
     }
     tbody.append(tr);
   }
-  if (!students.length || !teachers.length) {
-    root.append(el(`<div class="panel"><p class="muted">
-      Add students and teachers first.</p></div>`));
-    return;
-  }
   enhanceGrid($(".grid-scroll", panel), "assignments");
   $(".tt-head", panel).append(await gridUndoButton());
-
-  // drag-select a rectangle -> assign/clear/copy/paste the whole block
-  const bar = el(`<div class="row area-bar" hidden>
-    <span class="muted area-count"></span>
-    <span class="muted">set all to:</span>
-    <button class="pair-badge pair-hard" data-prio="0">0</button>
-    <button class="pair-badge pair-soft" data-prio="1">1</button>
-    <button class="pair-badge pair-soft" data-prio="2">2</button>
-    <button class="pair-badge pair-soft" data-prio="3">3</button>
-    <button class="pair-badge pair-clear" data-prio="">✕</button>
-    <button class="action secondary" data-act="copy">copy</button>
-    <button class="action secondary" data-act="paste">paste</button>
-    <button class="action secondary" data-act="unsel">deselect</button>
-  </div>`);
-  panel.insertBefore(bar, $(".grid-scroll", panel));
-  let rect = null;
-  const showBar = (r) => {
-    rect = r;
-    bar.hidden = false;
-    const n = (r.r2 - r.r1 + 1) * (r.c2 - r.c1 + 1);
-    $(".area-count", bar).textContent = `${n} cells`;
-    $('[data-act="paste"]', bar).disabled =
-      !(state.gridClip && state.gridClip.kind === "pair");
-  };
-  const selApi = attachAreaSelect($("table", panel), (r) => {
-    state.gridSel = { key: "assignments", rect: r };
-    showBar(r);
-  });
-  if (state.gridSel && state.gridSel.key === "assignments") {
-    selApi.setRect(state.gridSel.rect);
-    showBar(state.gridSel.rect);
-  }
-  bar.onclick = async (e) => {
-    const b = e.target.closest("button");
-    if (!b || !rect) return;
-    if (b.dataset.act === "unsel") {
-      selApi.clear();
-      rect = null;
-      state.gridSel = null;
-      bar.hidden = true;
-      return;
-    }
-    if (b.dataset.act === "copy") {
-      const vals = [];
-      for (let r = rect.r1; r <= rect.r2; r++) {
-        const row = [];
-        for (let c = rect.c1; c <= rect.c2; c++) {
-          const k = prio.get(`${students[r].id}|${teachers[c].id}`);
-          row.push(k === undefined ? null : k);
-        }
-        vals.push(row);
-      }
-      state.gridClip = { kind: "pair", vals };
-      toast(`Copied ${vals.length} × ${vals[0].length} cells`);
-      $('[data-act="paste"]', bar).disabled = false;
-      return;
-    }
-    const body = { set: [], clear: [] };
-    if (b.dataset.act === "paste") {
-      const clip = state.gridClip;
-      if (!clip || clip.kind !== "pair") return;
-      for (let i = 0; i < clip.vals.length; i++) {
-        for (let j = 0; j < clip.vals[i].length; j++) {
-          const r = rect.r1 + i, c = rect.c1 + j;
-          if (r >= students.length || c >= teachers.length) continue;
-          const v = clip.vals[i][j];
-          if (v === null) body.clear.push([teachers[c].id, students[r].id]);
-          else body.set.push([teachers[c].id, students[r].id, v]);
-        }
-      }
-    } else if ("prio" in b.dataset) {
-      for (let r = rect.r1; r <= rect.r2; r++) {
-        for (let c = rect.c1; c <= rect.c2; c++) {
-          if (b.dataset.prio === "") {
-            body.clear.push([teachers[c].id, students[r].id]);
-          } else {
-            body.set.push([teachers[c].id, students[r].id,
-                           parseInt(b.dataset.prio, 10)]);
-          }
-        }
-      }
-    } else return;
-    try {
-      const res = await api("POST", "/api/teacher_students/bulk", body);
-      toast(`Updated: ${res.set} assigned, ${res.cleared} cleared`);
-      render();
-    } catch (e2) { toast(e2.message, true); }
-  };
   root.append(panel);
+
+  // per-teacher summary: who is in charge of whom, at a glance
+  const byTeacher = new Map();         // teacher -> ["student: subj, subj"]
+  for (const st of students) {
+    const per = new Map();             // teacher -> [subject names]
+    for (const su of subjects) {
+      const set = assigned.get(`${st.id}|${su.id}`);
+      if (set) for (const t of set) {
+        if (!per.has(t)) per.set(t, []);
+        per.get(t).push(su.name);
+      }
+    }
+    for (const [t, sus] of per) {
+      if (!byTeacher.has(t)) byTeacher.set(t, []);
+      byTeacher.get(t).push(`${st.name} (${sus.sort().join(", ")})`);
+    }
+  }
+  if (byTeacher.size) {
+    const sum = el(`<div class="panel"><h2>By teacher</h2>
+      <table><thead><tr><th>Teacher</th><th>In charge of</th></tr></thead>
+      <tbody>${[...byTeacher.keys()]
+        .sort((a, b) => (tname[a] || a).localeCompare(tname[b] || b))
+        .map(t => `<tr><td>${esc(tname[t] || t)}</td>
+          <td>${esc(byTeacher.get(t).sort().join(" · "))}</td></tr>`)
+        .join("")}</tbody></table></div>`);
+    root.append(sum);
+  }
 }
 
 // -------------------------------------------------------------------- router

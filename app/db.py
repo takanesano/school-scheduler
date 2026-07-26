@@ -55,14 +55,16 @@ CREATE TABLE IF NOT EXISTS teacher_subjects (
     PRIMARY KEY (teacher_id, subject_id)
 );
 
-CREATE TABLE IF NOT EXISTS teacher_students (
-    teacher_id TEXT NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+-- Assignments: "this student's subject is taught by this teacher".
+-- Purely a HARD rule: a (student, subject) with any rows here may only
+-- be taught that subject by one of its assigned teachers; (student,
+-- subject) pairs with no rows are free. A teacher may be assigned to
+-- the same student for several subjects (one row per subject).
+CREATE TABLE IF NOT EXISTS student_subject_teachers (
     student_id TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
-    -- 0 = the student MUST be taught by this teacher (hard rule);
-    -- 1..9 = soft preference, smaller number = stronger
-    priority   INTEGER NOT NULL DEFAULT 1
-        CHECK (priority BETWEEN 0 AND 9),
-    PRIMARY KEY (teacher_id, student_id)
+    subject_id TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+    teacher_id TEXT NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+    PRIMARY KEY (student_id, subject_id, teacher_id)
 );
 
 CREATE TABLE IF NOT EXISTS student_needs (
@@ -153,3 +155,21 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     if "locked" not in cols:
         conn.execute("ALTER TABLE lessons ADD COLUMN locked "
                      "INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1))")
+    # Legacy assignments: the old per-(student, teacher) priority table.
+    # Its priority-0 (hard) rows become per-subject rows — one for each
+    # subject the teacher can teach — in student_subject_teachers; soft
+    # priorities (1-9) had no hard meaning and are dropped. The legacy
+    # table itself is the migration marker: it is removed afterwards, so
+    # this runs exactly once (and again for restored old backups).
+    legacy = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='teacher_students'").fetchone()
+    if legacy:
+        conn.execute(
+            "INSERT OR IGNORE INTO student_subject_teachers "
+            "  (student_id, subject_id, teacher_id) "
+            "SELECT ts.student_id, tsub.subject_id, ts.teacher_id "
+            "FROM teacher_students ts "
+            "JOIN teacher_subjects tsub ON tsub.teacher_id = ts.teacher_id "
+            "WHERE ts.priority = 0")
+        conn.execute("DROP TABLE teacher_students")
