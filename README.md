@@ -80,14 +80,21 @@ every two-lesson day with its date, plus all four metrics — so each
 objective can be checked at a glance.
 
 The Generate panel shows all rules as **one list**. Locked cards at the
-top are the built-in hard constraints. Below them, the eight conditions —
-one lesson per day per student, multiple-lessons-must-be-consecutive,
-the four teacher-workload objectives (including "few teacher days
-with at most N lessons", where N is edited on the card), the
-assigned-teacher preference, and **"Avoid penalized timeslots"**
-(each timeslot can carry a penalty score on the Timeslots tab;
-every lesson placed in such a slot costs that many points) — are
-draggable cards whose
+top are the built-in hard constraints. Below them, the eleven
+conditions — one lesson per day per student,
+multiple-lessons-must-be-consecutive, the four teacher-workload
+objectives (including "few teacher days with at most N lessons",
+where N is edited on the card), the assigned-teacher preference,
+**"Avoid penalized timeslots"** (each timeslot can carry a penalty
+score on the Timeslots tab; every lesson placed in such a slot costs
+that many points), **"Not the same subject twice on one day"** (a
+student's two-lesson day should be two different subjects), **"No
+idle gaps between a teacher's lessons"** (a teacher's day should be
+one contiguous block — every empty period sandwiched between their
+lessons counts), and **"Spread each subject's sessions over the
+term"** (a student needing e.g. 3 English sessions gets them roughly
+one per third of their available dates, instead of all three in the
+first free days) — are draggable cards whose
 order is the lexicographic priority both solvers optimize
 (1 = most important). The consecutiveness condition starts at priority 0
 (always active) by default. Dragging a card **above the
