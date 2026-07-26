@@ -105,6 +105,14 @@ button.small {
            padding: 0.4rem 0.6rem; margin: 0.3rem 0; font-size: 0.86rem; border-radius: 3px; }
 .okmsg { background: #eaf5ec; border-left: 3px solid var(--ok);
          padding: 0.4rem 0.6rem; margin: 0.3rem 0; font-size: 0.86rem; border-radius: 3px; }
+/* coverage surplus (more lessons than needed): blue, vs the amber
+   shortfall warning */
+.cov-over { background: #e7edfc; border-left: 3px solid var(--accent);
+            padding: 0.4rem 0.6rem; margin: 0.3rem 0;
+            font-size: 0.86rem; border-radius: 3px; }
+@media (prefers-color-scheme: dark) {
+  .cov-over { background: #1e2a45; }
+}
 .grid-table td.avail { background: #dcefe0; cursor: pointer; text-align: center; }
 .grid-table td.unavail { cursor: pointer; text-align: center; color: var(--muted); }
 .lesson-card {
