@@ -616,6 +616,43 @@ function renderCsv(root) {
     tbody.append(tr);
   }
   root.append(panel);
+
+  // whole-database backup: one file carries EVERYTHING (master data,
+  // schedule, locks, assignments, settings)
+  const backup = el(`<div class="panel"><h2>Database backup</h2>
+    <p class="muted">The whole database in one file — master data, the
+      schedule with its locks, assignments and settings. Download
+      regularly, and before big changes; restoring replaces
+      <b>everything</b> with the backup's contents.</p>
+    <div class="row">
+      <a class="action secondary" href="/api/backup.db">Download backup
+        (.db)</a>
+      <label class="action secondary" style="cursor:pointer">
+        Restore from backup…
+        <input type="file" id="restore-db" accept=".db"
+          style="display:none"></label>
+    </div></div>`);
+  $("#restore-db", backup).onchange = async (ev) => {
+    const file = ev.target.files[0];
+    ev.target.value = "";
+    if (!file) return;
+    if (!await appConfirm(
+      `Restore "${file.name}"?\n\nThis REPLACES the entire current `
+      + "database — schedule, students, teachers, settings, everything. "
+      + "Current data will be lost.\n\nTip: download a backup of the "
+      + "current state first.", "Replace everything")) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await api("POST", "/api/backup.db", fd);
+      state.lastGen = null;
+      state.selectedLessons.clear();
+      toast(`Restored: ${res.students} students, ${res.teachers} `
+        + `teachers, ${res.lessons} lessons`);
+      render();
+    } catch (e) { toast(e.message, true); }
+  };
+  root.append(backup);
 }
 
 // ---------------------------------------------------- shared calendar table

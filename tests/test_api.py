@@ -1013,6 +1013,90 @@ def test_generate_pins_locked_lessons_without_keep_existing(client):
         [("mon-2", True)]
 
 
+def test_backup_download_and_restore_roundtrip(client):
+    """Download a consistent snapshot, keep editing, then restore it —
+    the schedule (locks included) comes back exactly."""
+    seed_world(client)
+    lid = client.post("/api/lessons", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1",
+        "room_id": "r1", "timeslot_id": "mon-1"}).json()["id"]
+    client.post(f"/api/lessons/{lid}/lock", json={"locked": True})
+
+    r = client.get("/api/backup.db")
+    assert r.status_code == 200
+    assert r.content.startswith(b"SQLite format 3\x00")
+    assert "school-backup-" in r.headers["content-disposition"]
+    backup = r.content
+
+    # diverge: unlock + delete the lesson, add another student
+    client.post(f"/api/lessons/{lid}/lock", json={"locked": False})
+    client.delete(f"/api/lessons/{lid}")
+    client.post("/api/students", json={"id": "s9", "name": "Ghost"})
+    assert client.get("/api/schedule").json()["lessons"] == []
+
+    r = client.post("/api/backup.db",
+                    files={"file": ("backup.db", backup,
+                                    "application/x-sqlite3")})
+    assert r.status_code == 200
+    assert r.json()["lessons"] == 1
+    lessons = client.get("/api/schedule").json()["lessons"]
+    assert [(l["id"], l["timeslot_id"], l["locked"]) for l in lessons] \
+        == [(lid, "mon-1", True)]
+    assert not any(s["id"] == "s9"
+                   for s in client.get("/api/students").json())
+
+
+def test_restore_rejects_bad_files(client, tmp_path):
+    seed_world(client)
+    r = client.post("/api/backup.db",
+                    files={"file": ("x.db", b"not a database", "x")})
+    assert r.status_code == 422
+    # a valid SQLite file that is NOT a scheduler database
+    import sqlite3 as s3
+    other = tmp_path / "other.db"
+    conn = s3.connect(other)
+    with conn:
+        conn.execute("CREATE TABLE misc (x)")
+    conn.close()
+    r = client.post("/api/backup.db",
+                    files={"file": ("x.db", other.read_bytes(), "x")})
+    assert r.status_code == 422
+    assert "missing tables" in r.json()["detail"]
+    # the live data survived both rejections
+    assert client.get("/api/students").json()
+
+
+def test_restore_migrates_old_backups(tmp_path):
+    """A backup from before newer columns existed restores cleanly:
+    the schema migrations run right after the file is swapped in."""
+    from app import db as appdb
+    old = tmp_path / "old-backup.db"
+    appdb.init_db(old)
+    conn = appdb.connect(old)
+    with conn:
+        conn.execute("INSERT INTO students VALUES ('s1', 'Aoi')")
+        # simulate an old backup: drop a recently-added column's table
+        # row instead — easiest realistic case: strip lessons.locked
+        conn.execute("ALTER TABLE lessons DROP COLUMN locked")
+    conn.close()
+    data = old.read_bytes()
+
+    app.state.db_path = tmp_path / "live.db"
+    try:
+        with TestClient(app) as c:
+            c.post("/api/students", json={"id": "sX", "name": "Gone"})
+            r = c.post("/api/backup.db",
+                       files={"file": ("old.db", data, "x")})
+            assert r.status_code == 200
+            # data restored; the dropped 'locked' column was re-added by
+            # the migration (loading the schedule reads it)
+            assert c.get("/api/schedule").json()["lessons"] == []
+            students = c.get("/api/students").json()
+            assert [s["id"] for s in students] == ["s1"]
+    finally:
+        del app.state.db_path
+
+
 def test_old_db_gains_locked_lessons_column(tmp_path):
     """Lessons tables from before the lock feature are migrated in
     place on startup."""

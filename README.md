@@ -13,7 +13,10 @@ lessons by hand with instant validation. All views are month-style
 calendars (week rows, Mon–Sun columns).
 
 Everything runs on your machine; data lives in a single SQLite file
-(`school.db`). No internet connection or external service is needed.
+(`school.db`) and every change is saved to it immediately — there is
+no separate "save" step. Back up or move to another PC with the
+Database backup panel (CSV tab), or by copying that one file. No
+internet connection or external service is needed.
 
 ## Setup
 
@@ -169,6 +172,12 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
 - **Availability** tab — click cells in the per-date grid to toggle
   teacher and student availability.
 - **CSV import/export** tab — upload or download any table as CSV.
+  The **Database backup** panel below it downloads the whole database
+  as one timestamped `.db` file (master data, the schedule with its
+  locks, assignments, settings — a consistent snapshot, safe while
+  the app is running) and restores from such a file, replacing
+  everything after a confirmation. Older backups are migrated to the
+  current schema automatically on restore.
 
 ## CSV formats
 
