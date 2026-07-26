@@ -4,7 +4,7 @@ import pytest
 from app.scheduler import (Dataset, Lesson, Room, Timeslot,
                            check_input_problems, coverage_report,
                            objective_term_values, optimize_teacher_days,
-                           pair_miss_points, schedule_objective,
+                           schedule_objective,
                            slot_penalty_points, solve,
                            student_day_stats, teacher_day_stats,
                            teacher_single_days, validate)
@@ -164,36 +164,32 @@ def test_room_teacher_limit_zero_means_no_limit():
     assert vs == []
 
 
-def test_hard_pair_requires_assigned_teacher():
+def test_assignment_is_a_hard_per_subject_rule():
+    """s1's math is assigned to t1: t2 may not teach it, but t2 may
+    still teach s1's OTHER subjects (assignments are per subject)."""
     d = make_data()
-    d.teacher_students = {("s1", "t1"): 0}
+    d.subject_teachers = {("s1", "math"): {"t1"}}
     vs = validate(d, [Lesson("s1", "math", "t2", "r1", "mon-1", id=1)])
     assert codes(vs) == ["student_teacher_mismatch"]
     assert validate(d, [Lesson("s1", "math", "t1", "r1", "mon-1", id=1)]) \
         == []
-    # soft pairs (priority >= 1) are never a hard violation
-    d.teacher_students = {("s1", "t1"): 1}
+    # a different subject of the same student is unrestricted
+    assert validate(d, [Lesson("s1", "eng", "t2", "r1", "mon-1", id=1)]) \
+        == []
+
+
+def test_assignment_allows_any_of_several_teachers():
+    d = make_data()
+    d.subject_teachers = {("s1", "math"): {"t1", "t2"}}
     assert validate(d, [Lesson("s1", "math", "t2", "r1", "mon-1", id=1)]) \
         == []
 
 
-def test_pair_miss_points_weighting():
-    d = make_data()
-    d.teacher_students = {("s1", "t1"): 1, ("s2", "t1"): 9}
-    by_t2 = [Lesson("s1", "math", "t2", "r1", "mon-1", id=1),
-             Lesson("s2", "eng", "t2", "r1", "tue-1", id=2)]
-    # ignoring s1's priority-1 pair costs 9; s2's priority-9 costs 1
-    assert pair_miss_points(d, by_t2) == 10
-    by_t1 = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1)]
-    assert pair_miss_points(d, by_t1) == 0
-    assert objective_term_values(d, by_t2)["student_teacher_pair"] == 10
-
-
-def test_solver_honors_hard_pair():
-    """s1 must be taught by t2 even though t1 is alphabetically first
+def test_solver_honors_subject_assignment():
+    """s1's math must go to t2 even though t1 is alphabetically first
     and equally free."""
     d = make_data()
-    d.teacher_students = {("s1", "t2"): 0}
+    d.subject_teachers = {("s1", "math"): {"t2"}}
     d.student_needs = {("s1", "math"): 2}
     r = solve(d)
     assert r.complete
@@ -201,12 +197,12 @@ def test_solver_honors_hard_pair():
     assert {l.teacher_id for l in r.lessons} == {"t2"}
 
 
-def test_greedy_prefers_soft_paired_teacher():
-    """A soft assignment steers the greedy teacher choice without
-    forbidding others."""
+def test_solver_honors_multi_subject_assignment_same_teacher():
+    """One teacher assigned to the same student for BOTH subjects."""
     d = make_data()
-    d.teacher_students = {("s1", "t2"): 2}
-    d.student_needs = {("s1", "math"): 1, ("s2", "eng"): 1}
+    d.subject_teachers = {("s1", "math"): {"t2"}, ("s1", "eng"): {"t2"}}
+    d.student_needs = {("s1", "math"): 1, ("s1", "eng"): 1,
+                       ("s2", "math"): 1}
     r = solve(d)
     assert r.complete
     assert validate(d, r.lessons) == []
@@ -718,7 +714,7 @@ def test_objective_counts_slots_days_and_spreads():
     assert stats["t1"]["days"] == {DATE_OF["Mon"], DATE_OF["Tue"]}
     assert stats["t2"] == {"lessons": 0, "days": set()}
     # t1: 2 lessons/2 days, t2: 0/0 -> spreads 2, total days 2
-    assert schedule_objective(d, lessons) == (0, 0, 0, 2, 2, 2, 2, 0, 0, 0, 0)
+    assert schedule_objective(d, lessons) == (0, 0, 2, 2, 2, 2, 0, 0, 0, 0)
 
 
 def test_teacher_single_days_threshold():
@@ -776,7 +772,7 @@ def test_objective_ignores_ineligible_teachers():
     d.teachers["t9"] = "Ghost"          # no subjects, no availability
     lessons = [Lesson("s1", "math", "t1", "r1", "mon-1", id=1),
                Lesson("s2", "eng", "t2", "r1", "mon-1", id=2)]
-    assert schedule_objective(d, lessons) == (0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0)   # t9 not counted
+    assert schedule_objective(d, lessons) == (0, 0, 0, 2, 2, 0, 0, 0, 0, 0)   # t9 not counted
 
 
 def test_optimize_packs_teacher_into_fewer_days():
@@ -789,7 +785,7 @@ def test_optimize_packs_teacher_into_fewer_days():
                Lesson("s2", "eng", "t1", "r1", "tue-1")]
     out = optimize_teacher_days(d, lessons)
     assert validate(d, out) == []
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 1, 0, 0, 0, 0, 0, 0)
     assert sorted((l.student_id, l.subject_id) for l in out) == \
         [("s1", "math"), ("s2", "eng")]              # coverage untouched
 
@@ -820,7 +816,7 @@ def test_optimize_balances_days_across_teachers():
                               ("s2", "tue-1"), ("s2", "tue-2")}
     out = optimize_teacher_days(d, lessons)
     assert validate(d, out) == []
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0)   # one lesson+day each
+    assert schedule_objective(d, out) == (0, 0, 0, 2, 2, 0, 0, 0, 0, 0)   # one lesson+day each
     assert {l.teacher_id for l in out} == {"t1", "t2"}
 
 
@@ -836,7 +832,7 @@ def test_optimize_keeps_fixed_lessons_pinned():
     # the movable lesson joins the fixed lesson's day instead
     moved = next(l for l in out if l.student_id == "s2")
     assert d.timeslots[moved.timeslot_id].date == DATE_OF["Tue"]
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 1, 0, 0, 0, 0, 0, 0)
 
 
 def test_optimize_rebalances_idle_teacher_even_at_day_cost():
@@ -853,7 +849,7 @@ def test_optimize_rebalances_idle_teacher_even_at_day_cost():
     assert validate(d, out) == []
     counts = sorted((l.teacher_id for l in out))
     assert counts == ["t1", "t2"]                    # one lesson each
-    assert schedule_objective(d, out) == (0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0)
+    assert schedule_objective(d, out) == (0, 0, 0, 2, 2, 0, 0, 0, 0, 0)
 
 
 def test_optimize_balances_realistic_lopsided_schedule():
@@ -886,10 +882,9 @@ def test_schedule_objective_custom_order_permutes_tuple():
     reordered = schedule_objective(
         d, lessons, ["teacher_working_day", "teacher_day_spread",
                      "student_double_day", "student_day_gap",
-                     "student_teacher_pair",
                      "teacher_single_day", "teacher_slot_spread"])
-    assert reordered == (default[4], default[6], default[0], default[1],
-                         default[2], default[5], default[3])
+    assert reordered == (default[3], default[5], default[0], default[1],
+                         default[4], default[2])
 
 
 def test_optimizer_honors_objective_order():

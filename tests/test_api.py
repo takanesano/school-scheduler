@@ -359,7 +359,7 @@ def test_schedule_reports_teacher_stats(client):
     assert body["teacher_stats"] == [
         {"teacher_id": "t1", "name": "Tanaka", "lessons": 2, "days": 2}]
     assert body["objective"] == {"student_double_days": 0,
-                                 "student_day_gaps": 0, "pair_miss": 0,
+                                 "student_day_gaps": 0,
                                  "slot_spread": 0,
                                  "total_days": 2, "teacher_single_days": 2,
                                  "day_spread": 0, "slot_penalty": 0,
@@ -552,7 +552,6 @@ def test_generate_honors_objective_order(client):
                     json={"student_id": st, "subject_id": "math",
                           "sessions": 1})
     days_first = ["student_double_day", "student_day_gap",
-                  "student_teacher_pair",
                   "teacher_working_day", "teacher_single_day",
                   "teacher_slot_spread", "teacher_day_spread",
                   "slot_penalty", "student_subject_repeat",
@@ -592,7 +591,6 @@ def test_objective_order_persists_and_drives_generate(client):
     it."""
     from app.scheduler import OBJECTIVE_TERMS
     days_first = ["student_double_day", "student_day_gap",
-                  "student_teacher_pair",
                   "teacher_working_day", "teacher_single_day",
                   "teacher_slot_spread", "teacher_day_spread",
                   "slot_penalty", "student_subject_repeat",
@@ -736,8 +734,6 @@ ALWAYS_ACTIVE_CASES = [
     ("teacher_working_day", 2),
     ("teacher_single_day", 1),
     ("teacher_day_spread", 2),
-    # s2 is soft-assigned to t2 (priority 1) but taught by t1: 9 points
-    ("student_teacher_pair", 9),
 ]
 
 
@@ -746,17 +742,13 @@ def test_any_condition_can_be_always_active(client, term, value):
     """Nothing is hard-coded: EVERY objective term can be set as always
     active through settings, and each is enforced/reported generically.
     Fixture schedule: t1 teaches s1 twice on Mon (consecutive) and s2
-    once on Tue; t2 exists, teaches math, but has no lessons; s2 is
-    soft-assigned to t2 (priority 1), which the schedule ignores."""
+    once on Tue; t2 exists, teaches math, but has no lessons."""
     seed_world(client)
     client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
     client.post("/api/teacher_subjects",
                 json={"teacher_id": "t2", "subject_id": "math"})
     client.post("/api/teacher_availability",
                 json={"teacher_id": "t2", "timeslot_id": "tue-1"})
-    client.post("/api/teacher_students",
-                json={"teacher_id": "t2", "student_id": "s2",
-                      "priority": 1})
     for st, slot in (("s1", "mon-1"), ("s1", "mon-2"), ("s2", "tue-1")):
         assert client.post("/api/lessons", json={
             "student_id": st, "subject_id": "math", "teacher_id": "t1",
@@ -807,27 +799,30 @@ def test_undo_grid_edits_in_reverse_order(client):
     assert client.get("/api/undo").json()["count"] == n
 
 
-def test_undo_assignment_edits_restores_priorities(client):
+def test_undo_assignment_edits_restores_triples(client):
     seed_world(client)
     client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
-    client.post("/api/teacher_students", json={
-        "teacher_id": "t1", "student_id": "s1", "priority": 2})
-    client.post("/api/teacher_students/bulk", json={
-        "set": [["t1", "s1", 0], ["t2", "s2", 1]], "clear": []})
+    client.post("/api/student_subject_teachers", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1"})
+    client.post("/api/student_subject_teachers/bulk", json={
+        "add": [["s1", "math", "t2"], ["s2", "math", "t2"]],
+        "remove": []})
 
-    def pairs():
-        return {(p["teacher_id"], p["student_id"]): p["priority"]
-                for p in client.get("/api/teacher_students").json()}
+    def triples():
+        return {(a["student_id"], a["subject_id"], a["teacher_id"])
+                for a in
+                client.get("/api/student_subject_teachers").json()}
 
-    assert pairs() == {("t1", "s1"): 0, ("t2", "s2"): 1}
-    # undo the bulk: t1-s1 back to its PRIOR priority 2, t2-s2 gone
+    assert triples() == {("s1", "math", "t1"), ("s1", "math", "t2"),
+                         ("s2", "math", "t2")}
+    # undo the bulk: only the two rows it created disappear
     assert client.post("/api/schedule/undo").json()["undid"] == \
         "assignment block edit"
-    assert pairs() == {("t1", "s1"): 2}
+    assert triples() == {("s1", "math", "t1")}
     # undo the single add
     assert client.post("/api/schedule/undo").json()["undid"] == \
         "assignment change"
-    assert pairs() == {}
+    assert triples() == set()
 
 
 def test_bulk_availability_set_and_clear(client):
@@ -856,85 +851,80 @@ def test_bulk_availability_set_and_clear(client):
         "add": [["t1"]], "remove": []}).status_code == 422
 
 
-def test_bulk_teacher_students_set_and_clear(client):
+def test_bulk_assignments_add_and_remove(client):
     seed_world(client)
     client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
-    r = client.post("/api/teacher_students/bulk", json={
-        "set": [["t1", "s1", 0], ["t2", "s1", 2], ["t2", "s2", 1]],
-        "clear": []})
-    assert r.status_code == 200 and r.json()["set"] == 3
-    pairs = {(p["teacher_id"], p["student_id"]): p["priority"]
-             for p in client.get("/api/teacher_students").json()}
-    assert pairs == {("t1", "s1"): 0, ("t2", "s1"): 2, ("t2", "s2"): 1}
-    r = client.post("/api/teacher_students/bulk", json={
-        "set": [["t2", "s1", 3]], "clear": [["t1", "s1"]]})
+    r = client.post("/api/student_subject_teachers/bulk", json={
+        "add": [["s1", "math", "t1"], ["s1", "math", "t2"],
+                ["s2", "math", "t2"]],
+        "remove": []})
+    assert r.status_code == 200 and r.json()["added"] == 3
+
+    def triples():
+        return {(a["student_id"], a["subject_id"], a["teacher_id"])
+                for a in
+                client.get("/api/student_subject_teachers").json()}
+
+    assert triples() == {("s1", "math", "t1"), ("s1", "math", "t2"),
+                         ("s2", "math", "t2")}
+    r = client.post("/api/student_subject_teachers/bulk", json={
+        "add": [], "remove": [["s1", "math", "t1"]]})
     assert r.status_code == 200
-    pairs = {(p["teacher_id"], p["student_id"]): p["priority"]
-             for p in client.get("/api/teacher_students").json()}
-    assert pairs == {("t2", "s1"): 3, ("t2", "s2"): 1}
-    assert client.post("/api/teacher_students/bulk", json={
-        "set": [["t1", "s1", 10]], "clear": []}).status_code == 422
-    assert client.post("/api/teacher_students/bulk", json={
-        "set": [], "clear": [["t1"]]}).status_code == 422
+    assert triples() == {("s1", "math", "t2"), ("s2", "math", "t2")}
+    assert client.post("/api/student_subject_teachers/bulk", json={
+        "add": [["s1", "math"]], "remove": []}).status_code == 422
+    assert client.post("/api/student_subject_teachers/bulk", json={
+        "add": [["s1", "math", "ghost"]], "remove": []}).status_code == 422
 
 
-def test_teacher_students_csv_roundtrip(client):
-    """Assignments export/import through the CSV tab endpoints,
-    priorities included; import replaces the table's contents."""
+def test_assignments_csv_roundtrip(client):
+    """Assignments export/import through the CSV tab endpoints; import
+    replaces the table's contents."""
     seed_world(client)
     client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
-    client.post("/api/teacher_students", json={
-        "teacher_id": "t1", "student_id": "s1", "priority": 0})
-    client.post("/api/teacher_students", json={
-        "teacher_id": "t2", "student_id": "s2", "priority": 3})
-    r = client.get("/api/export/teacher_students")
+    client.post("/api/student_subject_teachers", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t1"})
+    client.post("/api/student_subject_teachers", json={
+        "student_id": "s2", "subject_id": "math", "teacher_id": "t2"})
+    r = client.get("/api/export/student_subject_teachers")
     assert r.status_code == 200
-    assert r.text == ("teacher_id,student_id,priority\n"
-                      "t1,s1,0\nt2,s2,3\n")
+    assert r.text == ("student_id,subject_id,teacher_id\n"
+                      "s1,math,t1\ns2,math,t2\n")
     # import a different set: it becomes the table's full contents
-    csv = "teacher_id,student_id,priority\nt2,s1,1\n"
-    r = client.post("/api/import/teacher_students",
+    csv = "student_id,subject_id,teacher_id\ns1,math,t2\n"
+    r = client.post("/api/import/student_subject_teachers",
                     files={"file": ("a.csv", csv, "text/csv")})
     assert r.status_code == 200 and r.json()["rows"] == 1
-    assert client.get("/api/teacher_students").json() == [
-        {"teacher_id": "t2", "student_id": "s1", "priority": 1}]
-    # invalid priority: all-or-nothing, nothing changes
-    bad = "teacher_id,student_id,priority\nt1,s1,10\n"
-    assert client.post("/api/import/teacher_students",
+    assert client.get("/api/student_subject_teachers").json() == [
+        {"student_id": "s1", "subject_id": "math", "teacher_id": "t2"}]
+    # unknown teacher: all-or-nothing, nothing changes
+    bad = "student_id,subject_id,teacher_id\ns1,math,ghost\n"
+    assert client.post("/api/import/student_subject_teachers",
                        files={"file": ("b.csv", bad, "text/csv")}
                        ).status_code == 422
-    assert len(client.get("/api/teacher_students").json()) == 1
+    assert len(client.get("/api/student_subject_teachers").json()) == 1
 
 
-def test_teacher_students_crud_and_hard_pair_flow(client):
-    """The Assignments tab's API: upsert with priority, listing, delete;
-    a priority-0 pair blocks manual adds by other teachers through the
-    usual caution flow."""
+def test_assignments_crud_and_hard_flow(client):
+    """The Assignments tab's API: add/list/delete triples; an assigned
+    (student, subject) blocks manual adds by other teachers through the
+    usual caution flow, and leaves OTHER subjects free."""
     seed_world(client)
     client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
     client.post("/api/teacher_subjects",
                 json={"teacher_id": "t2", "subject_id": "math"})
     client.post("/api/teacher_availability",
                 json={"teacher_id": "t2", "timeslot_id": "mon-1"})
-    r = client.post("/api/teacher_students", json={
-        "teacher_id": "t2", "student_id": "s1", "priority": 0})
+    r = client.post("/api/student_subject_teachers", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t2"})
     assert r.status_code == 200
-    assert client.get("/api/teacher_students").json() == [
-        {"teacher_id": "t2", "student_id": "s1", "priority": 0}]
-    # upsert changes the priority in place
-    client.post("/api/teacher_students", json={
-        "teacher_id": "t2", "student_id": "s1", "priority": 2})
-    assert client.get("/api/teacher_students").json()[0]["priority"] == 2
-    assert client.post("/api/teacher_students", json={
-        "teacher_id": "t2", "student_id": "s1", "priority": 10}
-        ).status_code == 422
-    assert client.post("/api/teacher_students", json={
-        "teacher_id": "ghost", "student_id": "s1", "priority": 1}
+    assert client.get("/api/student_subject_teachers").json() == [
+        {"student_id": "s1", "subject_id": "math", "teacher_id": "t2"}]
+    assert client.post("/api/student_subject_teachers", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "ghost"}
         ).status_code == 422
 
-    # back to hard: s1 must now be taught by t2
-    client.post("/api/teacher_students", json={
-        "teacher_id": "t2", "student_id": "s1", "priority": 0})
+    # s1's math must now be taught by t2
     base = {"student_id": "s1", "subject_id": "math", "room_id": "r1",
             "timeslot_id": "mon-1"}
     r = client.post("/api/lessons", json=dict(base, teacher_id="t1"))
@@ -944,11 +934,12 @@ def test_teacher_students_crud_and_hard_pair_flow(client):
     assert client.post("/api/lessons", json=dict(
         base, teacher_id="t2")).status_code == 200
 
-    client.delete("/api/teacher_students?teacher_id=t2&student_id=s1")
-    assert client.get("/api/teacher_students").json() == []
+    client.delete("/api/student_subject_teachers?student_id=s1"
+                  "&subject_id=math&teacher_id=t2")
+    assert client.get("/api/student_subject_teachers").json() == []
 
 
-def test_generate_respects_hard_pair(client):
+def test_generate_respects_assignment(client):
     seed_world(client)
     client.post("/api/teachers", json={"id": "t2", "name": "Suzuki"})
     client.post("/api/teacher_subjects",
@@ -956,8 +947,8 @@ def test_generate_respects_hard_pair(client):
     for slot in ("mon-1", "mon-2", "tue-1"):
         client.post("/api/teacher_availability",
                     json={"teacher_id": "t2", "timeslot_id": slot})
-    client.post("/api/teacher_students", json={
-        "teacher_id": "t2", "student_id": "s1", "priority": 0})
+    client.post("/api/student_subject_teachers", json={
+        "student_id": "s1", "subject_id": "math", "teacher_id": "t2"})
     client.post("/api/student_needs", json={
         "student_id": "s1", "subject_id": "math", "sessions": 2})
     assert client.post("/api/schedule/generate",
@@ -1925,3 +1916,42 @@ def test_index_serves_ui(client):
     r = client.get("/")
     assert r.status_code == 200
     assert "Cram School Scheduler" in r.text
+
+
+def test_legacy_teacher_students_table_migrates_to_triples(tmp_path):
+    """Old DBs (and backups) with the per-(teacher, student) priority
+    table: priority-0 rows expand to one row per subject the teacher
+    can teach; soft priorities are dropped; the legacy table is gone."""
+    import sqlite3 as s3
+    from app import db as appdb
+    db_path = tmp_path / "legacy.db"
+    appdb.init_db(db_path)
+    conn = appdb.connect(db_path)
+    with conn:
+        conn.executescript("""
+            INSERT INTO students VALUES ('s1', 'Aoi'), ('s2', 'Ren');
+            INSERT INTO teachers (id, name) VALUES ('t1', 'Tanaka');
+            INSERT INTO subjects VALUES ('math', 'Math'), ('eng', 'Eng');
+            INSERT INTO teacher_subjects VALUES ('t1', 'math'),
+                                                ('t1', 'eng');
+            CREATE TABLE teacher_students (
+                teacher_id TEXT NOT NULL, student_id TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (teacher_id, student_id));
+            INSERT INTO teacher_students VALUES ('t1', 's1', 0),
+                                                ('t1', 's2', 2);
+        """)
+    conn.close()
+    appdb.init_db(db_path)                  # migration runs here
+    conn = appdb.connect(db_path)
+    rows = {(r["student_id"], r["subject_id"], r["teacher_id"])
+            for r in conn.execute(
+                "SELECT student_id, subject_id, teacher_id "
+                "FROM student_subject_teachers")}
+    legacy = conn.execute(
+        "SELECT name FROM sqlite_master WHERE name='teacher_students'"
+        ).fetchone()
+    conn.close()
+    # hard pair expanded per teachable subject; soft pair (s2) dropped
+    assert rows == {("s1", "math", "t1"), ("s1", "eng", "t1")}
+    assert legacy is None

@@ -26,7 +26,7 @@ SPECS: dict[str, list[str]] = {
     "rooms": ["id", "name", "capacity", "teacher_capacity"],
     "timeslots": ["id", "date", "period", "label", "penalty"],
     "teacher_subjects": ["teacher_id", "subject_id"],
-    "teacher_students": ["teacher_id", "student_id", "priority"],
+    "student_subject_teachers": ["student_id", "subject_id", "teacher_id"],
     "student_needs": ["student_id", "subject_id", "sessions"],
     "teacher_availability": ["teacher_id", "timeslot_id"],
     "student_availability": ["student_id", "timeslot_id"],
@@ -36,7 +36,6 @@ OPTIONAL: dict[str, set[str]] = {
     # capacity defaults to 1; teacher_capacity to 0 = no teacher limit
     "rooms": {"capacity", "teacher_capacity"},
     "teachers": {"max_lessons_per_day"},   # 0 = no daily limit
-    "teacher_students": {"priority"},      # defaults to 1 (soft)
     "timeslots": {"label", "penalty"},   # default '' / 0 = no penalty
 }
 
@@ -82,7 +81,7 @@ def parse_csv(entity: str, text: str) -> list[dict[str, str]]:
                 val = {"capacity": "1", "label": "",
                        "teacher_capacity": "0",
                        "max_lessons_per_day": "0",
-                       "priority": "1", "penalty": "0"}[c]
+                       "penalty": "0"}[c]
             if not val and c not in optional:
                 errors.append(f"Line {lineno}: '{c}' is empty")
                 row_ok = False
@@ -114,13 +113,6 @@ def parse_csv(entity: str, text: str) -> list[dict[str, str]]:
         if "sessions" in out and not _is_pos_int(out["sessions"]):
             errors.append(f"Line {lineno}: sessions must be a "
                           f"positive integer, got '{out['sessions']}'")
-            continue
-        if "priority" in out and not (
-                _is_nonneg_int(out["priority"])
-                and int(out["priority"]) <= 9):
-            errors.append(f"Line {lineno}: priority must be 0-9 "
-                          f"(0 = must, 1-9 = soft preference), got "
-                          f"'{out['priority']}'")
             continue
         if "penalty" in out and not (
                 _is_nonneg_int(out["penalty"])
