@@ -40,6 +40,7 @@ met by exactly ``sessions`` lessons — no more, no fewer.
 """
 from __future__ import annotations
 
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
@@ -320,6 +321,9 @@ class SolveResult:
     complete: bool
     nodes_explored: int = 0
     backend: str = "v1"      # "v1" | "cpsat" | "current" (kept incumbent)
+    # the v1 backtracking search hit its wall-clock failsafe and the
+    # result fell back to the greedy best-effort
+    timed_out: bool = False
     # what the exact optimizer did (None unless solve_v2 was asked):
     # optimal | improved | no_improvement | kept_v1 |
     # no_solution_in_budget | infeasible | invalid_output | unavailable
@@ -445,7 +449,8 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
           teacher_capacity: int = 2,
           student_day_cap: int = 2, require_consecutive: bool = True,
           max_nodes: int = 500_000,
-          should_stop=None) -> SolveResult:
+          should_stop=None,
+          time_limit: float | None = None) -> SolveResult:
     """Greedy-first placement with exhaustive backtracking as fallback.
 
     v1 is the FAST, approximate solver (v2/CP-SAT is the slow exact one),
@@ -517,6 +522,9 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
     placed: list[Lesson] = []
     nodes = 0
     exhausted = False
+    timed = False
+    deadline = (time.monotonic() + time_limit
+                if time_limit is not None else None)
 
     def greedy_fill() -> Counter:
         """Place every requirement at its first candidate; returns the
@@ -554,8 +562,12 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
     sys.setrecursionlimit(max(_old_limit, len(requirements) + 500))
 
     def search(remaining: list[tuple[str, str]]) -> bool:
+        nonlocal timed
         if should_stop and should_stop():
             raise SolveCancelled()
+        if deadline is not None and time.monotonic() > deadline:
+            timed = True
+            return False
         nonlocal nodes, exhausted
         if not remaining:
             return True
@@ -585,6 +597,8 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
         opts = candidates(st, su)
         rest = remaining[:idx] + remaining[idx + 1:]
         for (s, t, r) in opts:
+            if timed or exhausted:
+                return False        # fast unwind after a cutoff
             nodes += 1
             if nodes >= max_nodes:
                 exhausted = True
@@ -614,7 +628,8 @@ def solve(data: Dataset, fixed_lessons: list[Lesson] | None = None,
         unsched = unschedulable + [
             (st, su, n) for (st, su), n in sorted(missing.items())]
         return SolveResult(fixed + placed, unsched,
-                           complete=not unsched, nodes_explored=nodes)
+                           complete=not unsched, nodes_explored=nodes,
+                           timed_out=timed)
 
     return SolveResult(fixed + placed, [], complete=True, nodes_explored=nodes)
 
@@ -793,7 +808,8 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
                           objective_order: list[str] | None = None,
                           max_rounds: int = 200,
                           single_day_max: int = 1,
-                          should_stop=None) -> list[Lesson]:
+                          should_stop=None,
+                          time_limit: float | None = None) -> list[Lesson]:
     """Deterministic local search improving ``schedule_objective``.
 
     Only ``movable`` lessons are changed; ``fixed`` ones (e.g. lessons the
@@ -847,15 +863,26 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
                 sorted(data.timeslots.values(), key=_slot_sort_key)]
     room_ids = sorted(data.rooms)
 
+    opt_deadline = (time.monotonic() + time_limit
+                    if time_limit is not None else None)
+
+    def out_of_time() -> bool:
+        return (opt_deadline is not None
+                and time.monotonic() > opt_deadline)
+
     for _ in range(max_rounds):
         if should_stop and should_stop():
             raise SolveCancelled()
+        if out_of_time():
+            break                 # keep the best schedule found so far
         improved = False
         best = obj(work)
         stats = teacher_day_stats(data, fixed + work)
 
         # -- day-block reassignment: teacher A's day D -> teacher B
         for a in sorted(data.teachers):
+            if out_of_time():
+                break
             for day in sorted(stats[a]["days"]):
                 block = [i for i, l in enumerate(work)
                          if l.teacher_id == a
@@ -886,6 +913,8 @@ def optimize_teacher_days(data: Dataset, movable: list[Lesson],
             (x.student_id, data.timeslots[x.timeslot_id].date)
             for x in fixed + work).items() if n >= 2}
         for i in sorted(range(len(work)), key=lambda i: lesson_key(work[i])):
+            if out_of_time():
+                break
             l = work[i]
             relieve = ((l.student_id, data.timeslots[l.timeslot_id].date)
                        in double_days)

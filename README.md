@@ -108,6 +108,12 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   schedule is still found whenever one exists (within a node budget).
   If the inputs make a complete schedule impossible, you get the best
   partial schedule plus exactly which needs could not be placed and why.
+  A **failsafe wall-clock limit** guarantees it can never run away: if
+  the backtracking search hasn't finished after ~20 seconds it is cut
+  off and the greedy best-effort is returned instead (a warning toast
+  says so). The same limit bounds the standard solver when it runs as
+  the exact solver's warm start, so warm-up never eats the search
+  budget.
 - **Exact (CP-SAT)** — models the whole problem as a constraint program
   with OR-tools and optimizes every priority at once, using all CPU
   cores. It keeps searching for its whole **search budget** (real
