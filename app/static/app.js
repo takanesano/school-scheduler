@@ -1745,6 +1745,61 @@ async function renderSchedule(root) {
   const moveLesson = (lessonId, timeslotId) =>
     patchLesson(lessonId, { timeslot_id: timeslotId }, "Moved");
 
+  // inline add: a small ＋ on each slot block (and right-click on the
+  // slot) opens a mini form pre-targeted at that timeslot
+  const openSlotAdd = (block, slotId) => {
+    const prev = $(".slot-add", grid);
+    if (prev) prev.remove();
+    const form = el(`<div class="lesson-card slot-add">
+      <div class="lesson-edit">
+        <select id="a-student">${opt(students, s => s.name)}</select>
+        <select id="a-subject">${opt(subjects, s => s.name)}</select>
+        <select id="a-teacher">${opt(teachers, t => t.name)}</select>
+        <select id="a-room">${opt(rooms, r => r.name)}</select>
+      </div>
+      <div class="lesson-edit-actions">
+        <button class="action" id="a-save">Add</button>
+        <button class="action secondary" id="a-cancel">Cancel</button>
+      </div></div>`);
+    $("#a-cancel", form).onclick = () => form.remove();
+    $("#a-save", form).onclick = async () => {
+      const body = {
+        student_id: $("#a-student", form).value,
+        subject_id: $("#a-subject", form).value,
+        teacher_id: $("#a-teacher", form).value,
+        room_id: $("#a-room", form).value,
+        timeslot_id: slotId,
+      };
+      if (!state.caution) {
+        try {
+          const res = await api("POST", "/api/lessons",
+            { ...body, force: true });
+          if (res.violations.length) {
+            toast(`Added with ${res.violations.length} violation(s) — `
+              + "see Status", true);
+          }
+          render();
+        } catch (e) { toast(e.message, true); }
+        return;
+      }
+      try {
+        await api("POST", "/api/lessons", body);
+        render();
+      } catch (e) {
+        if (await appConfirm(
+          `This lesson breaks constraints:\n\n${e.message}`,
+          "Add anyway")) {
+          try {
+            await api("POST", "/api/lessons", { ...body, force: true });
+            render();
+          } catch (e2) { toast(e2.message, true); }
+        }
+      }
+    };
+    block.append(form);
+    $("#a-student", form).focus();
+  };
+
   const dropHook = (block, slot) => {
     block.dataset.slotId = slot.timeslot_id;
     block.ondragover = (e) => {
@@ -1758,6 +1813,17 @@ async function renderSchedule(root) {
       block.classList.remove("drop-target");
       const lessonId = e.dataTransfer.getData("text/plain");
       if (lessonId) moveLesson(lessonId, slot.timeslot_id);
+    };
+    const addBtn = el(`<button class="slot-add-btn"
+      title="add a lesson in this timeslot">＋</button>`);
+    addBtn.onclick = (e) => {
+      e.stopPropagation();
+      openSlotAdd(block, slot.timeslot_id);
+    };
+    block.prepend(addBtn);
+    block.oncontextmenu = (e) => {
+      e.preventDefault();
+      openSlotAdd(block, slot.timeslot_id);
     };
   };
 

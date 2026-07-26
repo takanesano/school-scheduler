@@ -329,6 +329,13 @@ td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
 .cal-slot { border-top: 1px dashed var(--border); padding: 0.15rem 0 0.2rem;
             margin-top: 0.15rem; }
 .cal-slot[data-slot-id] { min-height: 1.8rem; }  /* comfortable drop area */
+.cal-slot { position: relative; }
+.slot-add-btn { position: absolute; top: 0.1rem; right: 0;
+                border: none; background: none; cursor: pointer;
+                color: var(--muted); font-size: 0.8rem; line-height: 1;
+                padding: 0 0.15rem; opacity: 0.3; }
+.cal-slot:hover .slot-add-btn { opacity: 1; color: var(--accent); }
+.slot-add { padding-right: 0.4rem; }
 .cal-period { font-size: 0.72rem; font-weight: 600; color: var(--muted);
               display: block; }
 .cal-entry { border-left: 3px solid var(--accent); padding: 0.1rem 0.35rem;
