@@ -159,6 +159,11 @@ def test_batch_xlsx_one_sheet_per_person():
     assert ws.cell(row=2, column=2).value == "葵"        # t1 Mon P1
     assert ws.cell(row=2, column=4).value == "蓮"        # t1 Wed P1
     assert ws.cell(row=3, column=1).value == "2限 10:20-11:30"
+    # two students in one slot are slash-delimited
+    both = teachers_xlsx([build_teacher_view(d, LESSONS + [
+        Lesson("s2", "eng", "t1", "r1", "mon-1", id=9)], "t1")], STAMP)
+    ws2 = load_workbook(io.BytesIO(both)).active
+    assert ws2.cell(row=2, column=2).value == "葵 / 蓮"
 
     import pytest as _pytest
     with _pytest.raises(ValueError):

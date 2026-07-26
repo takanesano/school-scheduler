@@ -246,7 +246,7 @@ def _teacher_matrix_pages(pdf: _HandoutPDF, view: dict,
         for p in periods:
             row = []
             for cell in week:
-                names = "、".join(
+                names = " / ".join(
                     e["student_name"]
                     for s in cell["slots"] if s["period"] == p
                     for e in s["entries"])

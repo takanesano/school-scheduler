@@ -309,7 +309,7 @@ def _teacher_matrix_sheet(ws, view: dict, generated_at: str) -> None:
                 if not cell["in_term"] or not has_slot:
                     c.fill = GREY
                     continue
-                names = "、".join(
+                names = " / ".join(
                     e["student_name"]
                     for s in cell["slots"] if s["period"] == p
                     for e in s["entries"])
