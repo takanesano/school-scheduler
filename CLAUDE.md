@@ -229,7 +229,11 @@ weeks and marks non-term days `in_term: false`.
   turns drag-across-cells into a rectangle selection (a >5px wiggle
   inside ONE cell selects it — needed as a paste anchor; a clean click
   still runs the cell's own action via a capture-phase click
-  suppressor). Per-panel `.area-bar` applies block actions through the
+  suppressor). Row/column headers select whole rows/columns
+  (colspan-aware: a date header = all its periods; drag along headers
+  extends the range), and mid-drag the box AUTO-SCROLLS when the
+  cursor nears its edge (document-level tracking + elementFromPoint,
+  clamped below the sticky header). Per-panel `.area-bar` applies block actions through the
   transactional bulk endpoints POST /api/{teacher,student}_availability
   /bulk {add, remove} and /api/teacher_students/bulk {set, clear};
   `state.gridClip` {kind: avail|pair, vals} is the copy/paste buffer

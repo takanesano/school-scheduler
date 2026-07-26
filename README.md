@@ -184,7 +184,11 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   same ↩ Undo support.
 - **Availability** tab — click cells in the per-date grid to toggle
   teacher and student availability. **Drag across cells to select a
-  rectangle**, then use the action bar to make the whole block
+  rectangle** (the grid auto-scrolls when the cursor reaches its
+  edge), or click/drag along the **name column or the period/date
+  headers to select whole rows and columns** — a date header selects
+  all of that day's periods. Then use the action bar to make the
+  whole block
   available / unavailable / inverted, or **copy** it and **paste** it
   elsewhere (select the target's top-left cell — a click with a tiny
   drag selects a single cell — and paste; teacher ↔ student grids are
