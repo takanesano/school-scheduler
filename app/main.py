@@ -853,11 +853,14 @@ def _run_generation(opts, conn, order, data, problems, existing, fixed,
         result = solve_v2(data, config=cfg, fixed_lessons=fixed,
                           incumbent=existing, cancel=token)
     else:
+        # failsafe: the standard solver must stay "fast, approximate" —
+        # a pathological search falls back to the greedy best-effort
         result = solve(data, fixed_lessons=fixed,
                        teacher_capacity=s["teacher_capacity"],
                        student_day_cap=s["student_day_cap"],
                        require_consecutive=_hard_consecutive(s),
-                       should_stop=token.event.is_set)
+                       should_stop=token.event.is_set,
+                       time_limit=20.0)
         if opts.compress_teacher_days:
             # user-placed lessons carry a DB id and stay pinned; only
             # solver-generated ones (id None) may be rearranged.
@@ -875,7 +878,8 @@ def _run_generation(opts, conn, order, data, problems, existing, fixed,
                 require_consecutive=_hard_consecutive(s),
                 objective_order=capped + rest,
                 single_day_max=s["single_day_max"],
-                should_stop=token.event.is_set)
+                should_stop=token.event.is_set,
+                time_limit=10.0)
     if token.event.is_set():
         # cancelled after solving finished but before writing: honor it
         raise SolveCancelled()
@@ -890,6 +894,7 @@ def _run_generation(opts, conn, order, data, problems, existing, fixed,
              for l in result.lessons])
     return {
         "cancelled": False,
+        "timed_out": result.timed_out,
         "complete": result.complete,
         "scheduled": len(result.lessons),
         "backend": result.backend,

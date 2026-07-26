@@ -142,12 +142,16 @@ def weighted_cost(data: Dataset, lessons: list[Lesson],
 
 def _v1_pipeline(data: Dataset, config: SolverConfig,
                  fixed_lessons: list[Lesson] | None,
-                 should_stop=None) -> SolveResult:
+                 should_stop=None,
+                 time_limit: float | None = None) -> SolveResult:
+    import time as _time
+    t0 = _time.monotonic()
     result = solve(data, fixed_lessons=fixed_lessons,
                    teacher_capacity=config.teacher_capacity,
                    student_day_cap=config.student_day_cap,
                    require_consecutive=config.require_consecutive,
-                   should_stop=should_stop)
+                   should_stop=should_stop,
+                   time_limit=time_limit)
     if result.complete:
         pinned = list(fixed_lessons or [])
         movable = [l for l in result.lessons if l not in pinned]
@@ -162,7 +166,9 @@ def _v1_pipeline(data: Dataset, config: SolverConfig,
             require_consecutive=config.require_consecutive,
             objective_order=order,
             single_day_max=config.single_day_max,
-            should_stop=should_stop)
+            should_stop=should_stop,
+            time_limit=(max(0.0, time_limit - (_time.monotonic() - t0))
+                        if time_limit is not None else None))
     return result
 
 
@@ -191,7 +197,11 @@ def solve_v2(data: Dataset, config: SolverConfig | None = None,
     if should_stop and should_stop():
         raise SolveCancelled()
     pinned = list(fixed_lessons or [])
-    v1 = _v1_pipeline(data, config, pinned, should_stop=should_stop)
+    # the warm start must never become the bottleneck of an exact run:
+    # give the v1 pipeline at most a quarter of the budget, capped
+    v1_budget = min(10.0, max(2.0, config.time_limit_seconds * 0.25))
+    v1 = _v1_pipeline(data, config, pinned, should_stop=should_stop,
+                      time_limit=v1_budget)
 
     def fully_valid(lessons):
         return not (validate(data, lessons, config.teacher_capacity,

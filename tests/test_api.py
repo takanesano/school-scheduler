@@ -233,6 +233,7 @@ def test_generate_and_fetch_schedule(client):
     assert r.status_code == 200
     body = r.json()
     assert body["complete"] is True
+    assert body["timed_out"] is False
     assert body["scheduled"] == 3
     assert body["unscheduled"] == []
 
