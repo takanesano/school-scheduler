@@ -131,6 +131,10 @@ button.small {
 .lesson-card.selected { outline: 2px solid var(--accent);
                         outline-offset: 1px; }
 .selecting .lesson-card { cursor: pointer; }
+.select-band { position: absolute; z-index: 30; pointer-events: none;
+               border: 1px solid var(--accent);
+               background: rgba(47, 111, 237, 0.12); }
+body.banding { user-select: none; }
 .select-bar { margin: 0 0 0.6rem; }
 /* panel header with the global Undo action on the far right */
 .tt-head { display: flex; align-items: center; gap: 0.6rem;
