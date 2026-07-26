@@ -362,7 +362,9 @@ def test_schedule_reports_teacher_stats(client):
                                  "student_day_gaps": 0, "pair_miss": 0,
                                  "slot_spread": 0,
                                  "total_days": 2, "teacher_single_days": 2,
-                                 "day_spread": 0, "slot_penalty": 0}
+                                 "day_spread": 0, "slot_penalty": 0,
+                                 "subject_repeats": 0, "teacher_idle": 0,
+                                 "subject_bunching": 0}
     assert body["student_stats"] == [
         {"student_id": "s1", "name": "Aoi", "lessons": 1, "days": 1,
          "double_days": []},
@@ -553,7 +555,8 @@ def test_generate_honors_objective_order(client):
                   "student_teacher_pair",
                   "teacher_working_day", "teacher_single_day",
                   "teacher_slot_spread", "teacher_day_spread",
-                  "slot_penalty"]
+                  "slot_penalty", "student_subject_repeat",
+                  "teacher_idle_gap", "student_subject_spread"]
     r = client.post("/api/schedule/generate",
                     json={"objective_order": days_first})
     assert r.json()["complete"] is True
@@ -592,7 +595,8 @@ def test_objective_order_persists_and_drives_generate(client):
                   "student_teacher_pair",
                   "teacher_working_day", "teacher_single_day",
                   "teacher_slot_spread", "teacher_day_spread",
-                  "slot_penalty"]
+                  "slot_penalty", "student_subject_repeat",
+                  "teacher_idle_gap", "student_subject_spread"]
     r = client.put("/api/settings", json={"objective_order": days_first})
     assert r.status_code == 200
     assert r.json()["objective_order"] == days_first

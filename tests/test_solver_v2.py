@@ -68,7 +68,9 @@ def test_lexicographic_weights_follow_custom_order():
         ["teacher_working_day", "student_double_day", "student_day_gap",
          "student_teacher_pair",
          "teacher_single_day", "teacher_day_spread",
-         "teacher_slot_spread", "slot_penalty"])
+         "teacher_slot_spread", "slot_penalty",
+         "student_subject_repeat", "teacher_idle_gap",
+         "student_subject_spread"])
     assert w.teacher_working_day > w.student_double_day \
         > w.student_day_gap > w.teacher_single_day \
         > w.teacher_day_spread > w.teacher_slot_spread > 0
@@ -86,7 +88,9 @@ def test_objective_terms_and_weighted_cost():
                      "student_teacher_pair": 0,
                      "teacher_slot_spread": 1, "teacher_working_day": 2,
                      "teacher_single_day": 1, "teacher_day_spread": 0,
-                     "slot_penalty": 0, "changed_lesson": 0}
+                     "slot_penalty": 0, "student_subject_repeat": 0,
+                     "teacher_idle_gap": 0, "student_subject_spread": 0,
+                     "changed_lesson": 0}
     cfg = SolverConfig(weights=ObjectiveWeights(
         student_double_day=10, teacher_slot_spread=5,
         teacher_working_day=1))
@@ -324,7 +328,9 @@ def test_cpsat_enforces_promoted_objective_cap():
         ["student_double_day", "student_day_gap", "student_teacher_pair",
          "teacher_working_day",
          "teacher_single_day", "teacher_slot_spread",
-         "teacher_day_spread", "slot_penalty"])
+         "teacher_day_spread", "slot_penalty",
+         "student_subject_repeat", "teacher_idle_gap",
+         "student_subject_spread"])
     free = solve_v2(d, config=SolverConfig(weights=days_first))
     assert len({l.teacher_id for l in free.lessons}) == 1
 
@@ -350,7 +356,9 @@ def test_always_active_is_stronger_than_any_priority_order():
     demoted = ObjectiveWeights.lexicographic(
         ["teacher_working_day", "teacher_slot_spread",
          "teacher_single_day", "teacher_day_spread", "student_day_gap",
-         "student_teacher_pair", "slot_penalty", "student_double_day"])
+         "student_teacher_pair", "slot_penalty",
+         "student_subject_repeat", "teacher_idle_gap",
+         "student_subject_spread", "student_double_day"])
 
     free = solve_v2(d, config=SolverConfig(weights=demoted))
     assert objective_terms(d, free.lessons)["student_double_day"] == 1
@@ -603,3 +611,79 @@ def test_cpsat_enforces_slot_penalty_cap():
     assert capped.complete
     assert objective_terms(d, capped.lessons)["slot_penalty"] == 0
     assert [l.timeslot_id for l in capped.lessons] == ["mon-2"]
+
+
+# ---------------- same-subject doubles, teacher idle gaps, subject spread
+
+def test_cpsat_packs_teacher_day_without_idle_gap():
+    """Two lessons that could sit at periods 1 and 3 are pulled together
+    (1 and 2) by the teacher_idle_gap term."""
+    d = Dataset()
+    d.students = {"sa": "A", "sb": "B"}
+    d.teachers = {"t1": "T"}
+    d.subjects = {"m": "M"}
+    d.rooms = {"r1": Room("r1", "R", 1)}
+    for p in (1, 2, 3):
+        d.timeslots[f"a-{p}"] = Timeslot(f"a-{p}", "2026-07-27", p)
+    d.teacher_subjects = {("t1", "m")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.student_availability = {("sa", "a-1"), ("sb", "a-2"), ("sb", "a-3")}
+    d.student_needs = {("sa", "m"): 1, ("sb", "m"): 1}
+    r = solve_v2(d, config=FAST)
+    assert sorted(l.timeslot_id for l in r.lessons) == ["a-1", "a-2"]
+    assert objective_terms(d, r.lessons)["teacher_idle_gap"] == 0
+
+
+def test_cpsat_avoids_same_subject_double_day():
+    d = make_data()
+    d.student_needs = {("s1", "math"): 2}
+    r = solve_v2(d, config=FAST)
+    assert r.complete
+    assert objective_terms(d, r.lessons)["student_subject_repeat"] == 0
+
+
+def test_cpsat_spreads_subject_sessions_over_buckets():
+    """3 sessions over a 12-day window land one per term third."""
+    import datetime as dt
+    d = Dataset()
+    d.students = {"s1": "A"}
+    d.teachers = {"t1": "T"}
+    d.subjects = {"eng": "E"}
+    d.rooms = {"r1": Room("r1", "R", 2)}
+    day = dt.date(2026, 7, 27)
+    for i in range(12):
+        date = (day + dt.timedelta(days=i)).isoformat()
+        sid = f"{date[5:7]}{date[8:10]}-1"
+        d.timeslots[sid] = Timeslot(sid, date, 1)
+    d.teacher_subjects = {("t1", "eng")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.student_availability = {("s1", s) for s in d.timeslots}
+    d.student_needs = {("s1", "eng"): 3}
+    r = solve_v2(d, config=FAST)
+    assert r.complete
+    assert objective_terms(d, r.lessons)["student_subject_spread"] == 0
+    dates = sorted(d.timeslots[l.timeslot_id].date for l in r.lessons)
+    assert dates[0] <= "2026-07-30"           # one in the first third
+    assert dates[-1] >= "2026-08-04"          # one in the last third
+
+
+def test_cpsat_enforces_idle_gap_cap_with_blind_weights():
+    """teacher_idle_gap promoted to always-active is respected even when
+    the weights ignore the term entirely."""
+    d = Dataset()
+    d.students = {"sa": "A", "sb": "B"}
+    d.teachers = {"t1": "T"}
+    d.subjects = {"m": "M"}
+    d.rooms = {"r1": Room("r1", "R", 1)}
+    for p in (1, 2, 3):
+        d.timeslots[f"a-{p}"] = Timeslot(f"a-{p}", "2026-07-27", p)
+    d.teacher_subjects = {("t1", "m")}
+    d.teacher_availability = {("t1", s) for s in d.timeslots}
+    d.student_availability = {("sa", "a-1"), ("sb", "a-2"), ("sb", "a-3")}
+    d.student_needs = {("sa", "m"): 1, ("sb", "m"): 1}
+    blind = ObjectiveWeights(teacher_working_day=1)
+    r = solve_v2(d, config=SolverConfig(
+        weights=blind, deterministic_time=3.0,
+        objective_caps={"teacher_idle_gap": 0}))
+    assert r.backend == "cpsat"
+    assert objective_terms(d, r.lessons)["teacher_idle_gap"] == 0
