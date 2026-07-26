@@ -1408,7 +1408,13 @@ async function renderSchedule(root) {
       status.append(el(`<div class="violation">✗ ${esc(v.message)}</div>`));
   }
   const unmet = schedule.coverage;
-  for (const c of unmet) status.append(el(`<div class="warning">△ ${esc(c.message)}</div>`));
+  for (const c of unmet) {
+    // shortfalls (student would miss lessons) look different from
+    // surpluses (more lessons than the registered need)
+    const over = c.code !== "need_unmet";
+    status.append(el(`<div class="${over ? "cov-over" : "warning"}">${
+      over ? "⬆" : "⬇"} ${esc(c.message)}</div>`));
+  }
   if (!check.problems.length && !schedule.violations.length && !unmet.length) {
     status.append(el(`<div class="okmsg">✓ Schedule is valid and every need is covered.</div>`));
   }
