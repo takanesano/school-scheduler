@@ -45,71 +45,171 @@ const TABS = [
 // finishes; rect is {r1,c1,r2,c2} in tbody-row / data-column
 // coordinates (the row-header column is excluded).
 function attachAreaSelect(table, onSel) {
-  let anchor = null;
+  let mode = null;        // "cells" | "row" | "col"
+  let anchor = null;      // cells: {r,c}; row: r; col: {c, span}
+  let last = null;
   let dragging = false;
   let suppress = false;
-  let last = null;
+  let downXY = null;
+  let mouseXY = null;
+  let scrollTimer = null;
+  let moveTracker = null;
+  const wrap = table.closest(".grid-scroll");
+
+  const dims = () => {
+    const rows = table.tBodies[0].rows;
+    return { nr: rows.length,
+             nc: rows.length ? rows[0].cells.length - 1 : 0 };
+  };
   const clear = () => {
     for (const c of table.querySelectorAll(".area-sel")) {
       c.classList.remove("area-sel");
     }
   };
-  const posOf = (t) => {
+  const cellPos = (t) => {
     const td = t.closest ? t.closest("td") : null;
     if (!td || td.cellIndex === 0 || !td.closest("tbody")) return null;
     return { r: td.parentElement.sectionRowIndex, c: td.cellIndex - 1 };
   };
-  const paint = (a, b) => {
+  // row headers (tbody th) select whole rows; column headers (thead
+  // th, colspan-aware — a date header selects all its periods) select
+  // whole columns
+  const headerPos = (t) => {
+    const th = t.closest ? t.closest("th") : null;
+    if (!th || !th.closest("table") || th.closest("table") !== table) {
+      return null;
+    }
+    if (th.closest("tbody")) {
+      return { type: "row", r: th.parentElement.sectionRowIndex };
+    }
+    if (th.closest("thead") && th.cellIndex > 0) {
+      let c = 0;
+      for (const sib of th.parentElement.cells) {
+        if (sib === th) break;
+        c += sib.colSpan;
+      }
+      return { type: "col", c: c - 1, span: th.colSpan };
+    }
+    return null;
+  };
+  const rect = () => {
+    const { nr, nc } = dims();
+    if (mode === "row") {
+      return { r1: Math.min(anchor, last), r2: Math.max(anchor, last),
+               c1: 0, c2: nc - 1 };
+    }
+    if (mode === "col") {
+      return { r1: 0, r2: nr - 1,
+               c1: Math.min(anchor.c, last.c),
+               c2: Math.max(anchor.c + anchor.span - 1,
+                            last.c + last.span - 1) };
+    }
+    return { r1: Math.min(anchor.r, last.r),
+             r2: Math.max(anchor.r, last.r),
+             c1: Math.min(anchor.c, last.c),
+             c2: Math.max(anchor.c, last.c) };
+  };
+  const paint = () => {
     clear();
-    const r1 = Math.min(a.r, b.r), r2 = Math.max(a.r, b.r);
-    const c1 = Math.min(a.c, b.c), c2 = Math.max(a.c, b.c);
+    const rc = rect();
     const rows = table.tBodies[0].rows;
-    for (let r = r1; r <= r2; r++) {
-      for (let c = c1; c <= c2; c++) {
-        const cell = rows[r].cells[c + 1];
+    for (let r = rc.r1; r <= rc.r2; r++) {
+      for (let c = rc.c1; c <= rc.c2; c++) {
+        const cell = rows[r] && rows[r].cells[c + 1];
         if (cell) cell.classList.add("area-sel");
       }
     }
-    return { r1, c1, r2, c2 };
+    return rc;
   };
-  let downXY = null;
+  const track = (t) => {   // update `last` from an event target
+    if (mode === "cells") {
+      const p = cellPos(t);
+      if (p) { last = p; return true; }
+    } else if (mode === "row") {
+      const h = headerPos(t);
+      if (h && h.type === "row") { last = h.r; return true; }
+      const p = cellPos(t);
+      if (p) { last = p.r; return true; }
+    } else if (mode === "col") {
+      const h = headerPos(t);
+      if (h && h.type === "col") { last = h; return true; }
+      const p = cellPos(t);
+      if (p) { last = { c: p.c, span: 1 }; return true; }
+    }
+    return false;
+  };
+  // scroll the grid box when the cursor sits near (or past) its edge
+  // mid-drag, and keep extending the selection to the cell that ends
+  // up under the cursor
+  const autoScroll = () => {
+    if (!dragging || !wrap || !mouseXY) return;
+    const r = wrap.getBoundingClientRect();
+    const M = 30, S = 26;
+    let dx = 0, dy = 0;
+    if (mouseXY[0] < r.left + M) dx = -S;
+    else if (mouseXY[0] > r.right - M) dx = S;
+    if (mouseXY[1] < r.top + M) dy = -S;
+    else if (mouseXY[1] > r.bottom - M) dy = S;
+    if (!dx && !dy) return;
+    wrap.scrollLeft += dx;
+    wrap.scrollTop += dy;
+    const headH = table.tHead ? table.tHead.offsetHeight : 0;
+    const x = Math.min(Math.max(mouseXY[0], r.left + 4), r.right - 4);
+    const y = Math.min(Math.max(mouseXY[1], r.top + headH + 4),
+                       r.bottom - 4);
+    const under = document.elementFromPoint(x, y);
+    if (under && track(under)) paint();
+  };
+  const finish = () => {
+    if (moveTracker) document.removeEventListener("mousemove", moveTracker);
+    moveTracker = null;
+    clearInterval(scrollTimer);
+    if (dragging) {
+      onSel(paint());
+      suppress = true;   // swallow the click that follows the drag
+    }
+    mode = null;
+    anchor = null;
+    dragging = false;
+  };
   table.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
-    const p = posOf(e.target);
-    if (!p) return;
     suppress = false;
-    anchor = p;
-    last = p;
+    const h = headerPos(e.target);
+    const p = cellPos(e.target);
+    if (h && h.type === "row") {
+      mode = "row"; anchor = h.r; last = h.r; dragging = true; paint();
+    } else if (h && h.type === "col") {
+      mode = "col"; anchor = h; last = h; dragging = true; paint();
+    } else if (p) {
+      mode = "cells"; anchor = p; last = p; dragging = false;
+    } else return;
     downXY = [e.clientX, e.clientY];
-    dragging = false;
-    document.addEventListener("mouseup", () => {
-      if (dragging) {
-        onSel(paint(anchor, last));
-        suppress = true;   // swallow the click that follows the drag
-      }
-      anchor = null;
-      dragging = false;
-    }, { once: true });
+    mouseXY = downXY;
+    e.preventDefault();          // no text selection while dragging
+    moveTracker = (ev) => { mouseXY = [ev.clientX, ev.clientY]; };
+    document.addEventListener("mousemove", moveTracker);
+    scrollTimer = setInterval(autoScroll, 40);
+    document.addEventListener("mouseup", finish, { once: true });
   });
   table.addEventListener("mouseover", (e) => {
-    if (!anchor) return;
-    const p = posOf(e.target);
-    if (!p) return;
-    last = p;
-    if (!dragging && (p.r !== anchor.r || p.c !== anchor.c)) {
-      dragging = true;
+    if (!mode) return;
+    if (!track(e.target)) return;
+    if (mode === "cells" && !dragging) {
+      if (last.r !== anchor.r || last.c !== anchor.c) dragging = true;
+      else return;
     }
-    if (dragging) paint(anchor, p);
+    paint();
   });
   // a small wiggle INSIDE one cell also starts a selection, so a
   // single cell can be selected (e.g. as a paste anchor); a clean
   // click still runs the cell's own action
   table.addEventListener("mousemove", (e) => {
-    if (!anchor || dragging || !downXY) return;
+    if (mode !== "cells" || dragging || !downXY) return;
     if (Math.abs(e.clientX - downXY[0])
         + Math.abs(e.clientY - downXY[1]) > 5) {
       dragging = true;
-      paint(anchor, last);
+      paint();
     }
   });
   table.addEventListener("click", (e) => {
