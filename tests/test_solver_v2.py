@@ -68,7 +68,7 @@ def test_lexicographic_weights_follow_custom_order():
         ["teacher_working_day", "student_double_day", "student_day_gap",
          "student_teacher_pair",
          "teacher_single_day", "teacher_day_spread",
-         "teacher_slot_spread"])
+         "teacher_slot_spread", "slot_penalty"])
     assert w.teacher_working_day > w.student_double_day \
         > w.student_day_gap > w.teacher_single_day \
         > w.teacher_day_spread > w.teacher_slot_spread > 0
@@ -86,7 +86,7 @@ def test_objective_terms_and_weighted_cost():
                      "student_teacher_pair": 0,
                      "teacher_slot_spread": 1, "teacher_working_day": 2,
                      "teacher_single_day": 1, "teacher_day_spread": 0,
-                     "changed_lesson": 0}
+                     "slot_penalty": 0, "changed_lesson": 0}
     cfg = SolverConfig(weights=ObjectiveWeights(
         student_double_day=10, teacher_slot_spread=5,
         teacher_working_day=1))
@@ -324,7 +324,7 @@ def test_cpsat_enforces_promoted_objective_cap():
         ["student_double_day", "student_day_gap", "student_teacher_pair",
          "teacher_working_day",
          "teacher_single_day", "teacher_slot_spread",
-         "teacher_day_spread"])
+         "teacher_day_spread", "slot_penalty"])
     free = solve_v2(d, config=SolverConfig(weights=days_first))
     assert len({l.teacher_id for l in free.lessons}) == 1
 
@@ -350,7 +350,7 @@ def test_always_active_is_stronger_than_any_priority_order():
     demoted = ObjectiveWeights.lexicographic(
         ["teacher_working_day", "teacher_slot_spread",
          "teacher_single_day", "teacher_day_spread", "student_day_gap",
-         "student_teacher_pair", "student_double_day"])
+         "student_teacher_pair", "slot_penalty", "student_double_day"])
 
     free = solve_v2(d, config=SolverConfig(weights=demoted))
     assert objective_terms(d, free.lessons)["student_double_day"] == 1
@@ -571,3 +571,35 @@ def test_resolve_repairs_sample_term_with_few_changes():
     changed = objective_terms(d, r.lessons,
                               reference=current)["changed_lesson"]
     assert 1 <= changed <= 2      # the broken lesson, plus at most one more
+
+
+# ----------------------------------------------------- timeslot penalties
+
+def test_cpsat_avoids_penalized_slots():
+    """With slot_penalty weighted (default order includes it), the CP
+    model steers lessons away from penalized slots when free ones
+    exist."""
+    d = make_data()
+    d.timeslots["mon-1"] = Timeslot("mon-1", "2026-07-27", 1, "", 5)
+    d.student_needs = {("s1", "math"): 2}
+    r = solve_v2(d, config=FAST)
+    assert r.complete
+    assert objective_terms(d, r.lessons)["slot_penalty"] == 0
+    assert all(l.timeslot_id != "mon-1" for l in r.lessons)
+
+
+def test_cpsat_enforces_slot_penalty_cap():
+    """slot_penalty promoted to always-active: even weights that ignore
+    the term entirely must respect the cap."""
+    d = make_data(n_slots_per_day=2, days=("Mon",))
+    d.timeslots["mon-1"] = Timeslot("mon-1", "2026-07-27", 1, "", 5)
+    d.student_needs = {("s1", "math"): 1}
+    # only teacher_working_day matters to the weights; both slots tie
+    blind = ObjectiveWeights(teacher_working_day=1)
+    capped = solve_v2(d, config=SolverConfig(
+        weights=blind, deterministic_time=3.0,
+        objective_caps={"slot_penalty": 0}))
+    assert capped.backend == "cpsat"
+    assert capped.complete
+    assert objective_terms(d, capped.lessons)["slot_penalty"] == 0
+    assert [l.timeslot_id for l in capped.lessons] == ["mon-2"]

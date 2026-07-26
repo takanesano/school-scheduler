@@ -41,7 +41,8 @@ from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, SolveCancelled,
                         SolveResult, _slot_sort_key, coverage_report,
                         eligible_teachers, hard_pair_teachers,
                         objective_term_values, optimize_teacher_days,
-                        pair_miss_points, solve, validate)
+                        pair_miss_points, slot_penalty_points, solve,
+                        validate)
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,8 @@ class ObjectiveWeights:
     teacher_single_day: float = 0.0   # per (teacher, day) with at most
     #                                   SolverConfig.single_day_max lessons
     teacher_day_spread: float = 0.0   # per day of max-min day-count spread
+    slot_penalty: float = 0.0         # per timeslot-penalty POINT (see
+    #                                    scheduler.slot_penalty_points)
     changed_lesson: float = 0.0       # per lesson differing from a
     #                                   reference schedule (rescheduling)
 
@@ -79,8 +82,8 @@ class ObjectiveWeights:
         if sorted(order) != sorted(OBJECTIVE_TERMS):
             raise ValueError(
                 f"order must be a permutation of {OBJECTIVE_TERMS}")
-        magnitudes = [1_000_000_000_000.0, 10_000_000_000.0,
-                      100_000_000.0, 1_000_000.0,
+        magnitudes = [100_000_000_000_000.0, 1_000_000_000_000.0,
+                      10_000_000_000.0, 100_000_000.0, 1_000_000.0,
                       10_000.0, 100.0, 1.0]
         return cls(**{name: magnitudes[i] for i, name in enumerate(order)})
 
@@ -567,6 +570,19 @@ def _solve_cpsat(data: Dataset, config: SolverConfig,
             pinned_pts = pair_miss_points(data, pinned)
             m.Add(sum(mw * v for (mw, v) in miss_terms)
                   <= caps["student_teacher_pair"] - pinned_pts)
+    if w.slot_penalty or "slot_penalty" in caps:
+        # like pair-miss: direct coefficients on the lesson variables,
+        # one per lesson placed in a penalized slot
+        pen_terms = [(data.timeslots[sid].penalty, v)
+                     for (st, su, sid, t, r), v in sorted(x.items())
+                     if data.timeslots[sid].penalty]
+        if w.slot_penalty:
+            obj += [int(round(w.slot_penalty)) * pw * v
+                    for (pw, v) in pen_terms]
+        if "slot_penalty" in caps:
+            pinned_pen = slot_penalty_points(data, pinned)
+            m.Add(sum(pw * v for (pw, v) in pen_terms)
+                  <= caps["slot_penalty"] - pinned_pen)
     if w.teacher_working_day:
         obj += [int(round(w.teacher_working_day)) * wd for wd in wd_vars]
     if "teacher_working_day" in caps:

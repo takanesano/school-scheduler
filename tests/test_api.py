@@ -279,7 +279,7 @@ def test_schedule_reports_teacher_stats(client):
                                  "student_day_gaps": 0, "pair_miss": 0,
                                  "slot_spread": 0,
                                  "total_days": 2, "teacher_single_days": 2,
-                                 "day_spread": 0}
+                                 "day_spread": 0, "slot_penalty": 0}
     assert body["student_stats"] == [
         {"student_id": "s1", "name": "Aoi", "lessons": 1, "days": 1,
          "double_days": []},
@@ -469,7 +469,8 @@ def test_generate_honors_objective_order(client):
     days_first = ["student_double_day", "student_day_gap",
                   "student_teacher_pair",
                   "teacher_working_day", "teacher_single_day",
-                  "teacher_slot_spread", "teacher_day_spread"]
+                  "teacher_slot_spread", "teacher_day_spread",
+                  "slot_penalty"]
     r = client.post("/api/schedule/generate",
                     json={"objective_order": days_first})
     assert r.json()["complete"] is True
@@ -507,7 +508,8 @@ def test_objective_order_persists_and_drives_generate(client):
     days_first = ["student_double_day", "student_day_gap",
                   "student_teacher_pair",
                   "teacher_working_day", "teacher_single_day",
-                  "teacher_slot_spread", "teacher_day_spread"]
+                  "teacher_slot_spread", "teacher_day_spread",
+                  "slot_penalty"]
     r = client.put("/api/settings", json={"objective_order": days_first})
     assert r.status_code == 200
     assert r.json()["objective_order"] == days_first
@@ -1467,6 +1469,45 @@ def test_old_db_gains_room_teacher_capacity_column(tmp_path):
                        "WHERE id = 'r1'").fetchone()
     conn.close()
     assert (row["capacity"], row["teacher_capacity"]) == (3, 0)
+
+
+def test_old_db_gains_timeslot_penalty_column(tmp_path):
+    """DBs (and hence old backups) from before slot penalties existed
+    are migrated in place on startup (ALTER TABLE, default 0)."""
+    import sqlite3 as s3
+    from app import db as appdb
+    db_path = tmp_path / "old_slots.db"
+    conn = s3.connect(db_path)
+    with conn:
+        conn.execute("CREATE TABLE timeslots (id TEXT PRIMARY KEY, "
+                     "date TEXT NOT NULL, period INTEGER NOT NULL, "
+                     "label TEXT NOT NULL DEFAULT '', UNIQUE (date, period))")
+        conn.execute("INSERT INTO timeslots VALUES "
+                     "('mon-1', '2026-07-27', 1, '')")
+    conn.close()
+    appdb.init_db(db_path)
+    conn = appdb.connect(db_path)
+    row = conn.execute("SELECT penalty FROM timeslots "
+                       "WHERE id = 'mon-1'").fetchone()
+    conn.close()
+    assert row["penalty"] == 0
+
+
+def test_timeslot_penalty_kept_when_post_omits_it(client):
+    """Edits that do not send the penalty field (e.g. old clients or a
+    label-only update) must not reset a stored penalty."""
+    client.post("/api/timeslots", json={
+        "id": "x-1", "date": "2026-07-27", "period": 1, "penalty": 5})
+    client.post("/api/timeslots", json={
+        "id": "x-1", "date": "2026-07-27", "period": 1, "label": "17:00"})
+    rows = client.get("/api/timeslots").json()
+    assert rows == [{"id": "x-1", "date": "2026-07-27", "period": 1,
+                     "label": "17:00", "penalty": 5}]
+    # an explicit value still updates it
+    client.post("/api/timeslots", json={
+        "id": "x-1", "date": "2026-07-27", "period": 1, "label": "17:00",
+        "penalty": 0})
+    assert client.get("/api/timeslots").json()[0]["penalty"] == 0
 
 
 @pytest.mark.parametrize("legacy,expect_gap_cap", [("1", True), ("0", False)])
