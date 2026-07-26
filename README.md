@@ -166,8 +166,10 @@ Two solvers, one explicit trade-off (chosen in the Generate panel):
   The Timeslots tab has a **mass-add** form: pick a date range, weekdays,
   and periods (with time labels) to create a whole term's slots at once;
   existing (date, period) pairs are skipped, never overwritten.
-- **Student needs** tab — set total sessions per student and subject,
-  and which subjects each teacher can teach.
+- **Student needs** tab — an editable student × subject matrix: type
+  the session count straight into a cell (saved immediately; blank or
+  0 removes the need), with a per-student total column — plus which
+  subjects each teacher can teach.
 - **Assignments** tab — who is in charge of whom: click a cell in the
   student × teacher grid to cycle the pair's rigidity. **0** (red)
   means the student **must** be taught by that teacher — a hard rule
