@@ -1100,6 +1100,9 @@ async function renderSchedule(root) {
   // priority 0 = always active (a hard cap, stored in settings); cards
   // below are the soft priorities 1..n. Dragging across the divider
   // changes which side a card is on.
+  if (settings.objective_order) {
+    state.objOrder = settings.objective_order;
+  }
   const caps = settings.objective_caps || {};
   const CAP_DEFAULTS = { student_double_day: 0, student_day_gap: 0,
                          student_teacher_pair: 0,
@@ -1114,6 +1117,7 @@ async function renderSchedule(root) {
         student_day_cap: settings.student_day_cap,
         single_day_max: settings.single_day_max,
         objective_caps: caps,
+        objective_order: state.objOrder,
         ...patch,
       });
       render();   // everything revalidates against the new rules
@@ -1142,7 +1146,7 @@ async function renderSchedule(root) {
       const nc = { ...caps };
       delete nc[moved];
       putCaps(nc);
-    } else renderObjList();
+    } else putObjSettings({});   // persist the new priority order
   }
 
   // Drop-position preview: a line on the exact edge where the dragged
@@ -1352,7 +1356,13 @@ async function renderSchedule(root) {
     const known = state.exact ? state.exactBudget : null;
     const prog = el(`<div class="gen-progress${known ? "" : " indeterminate"}">
       <div class="gen-progress-track"><div class="gen-progress-bar"></div></div>
-      <div class="gen-progress-label">Solving…</div></div>`);
+      <div class="gen-progress-row"><span class="gen-progress-label">Solving…</span>
+        <button class="action secondary" id="gen-cancel">Cancel</button></div></div>`);
+    $("#gen-cancel", prog).onclick = async () => {
+      $("#gen-cancel", prog).disabled = true;
+      try { await api("POST", "/api/schedule/cancel"); }
+      catch (e) { toast(e.message, true); }
+    };
     $("#gen-result", ctrl).replaceChildren(prog);
     const barEl = $(".gen-progress-bar", prog);
     const labEl = $(".gen-progress-label", prog);
@@ -1385,6 +1395,13 @@ async function renderSchedule(root) {
         v2_time_budget: state.exactBudget,
         objective_order: state.objOrder,
       });
+      if (res.cancelled) {
+        toast("Generation cancelled — schedule unchanged");
+        btn.disabled = false;
+        btn.textContent = "Generate schedule";
+        prog.remove();
+        return;
+      }
       state.lastGen = res;
       if (res.complete) {
         toast(`Complete schedule: ${res.scheduled} lessons`

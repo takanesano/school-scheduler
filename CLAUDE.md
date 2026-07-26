@@ -98,8 +98,15 @@ weeks and marks non-term days `in_term: false`.
   `(K+1)*wd - load <= K*sd`); `schedule_objective(data, lessons,
   order)` and
   `ObjectiveWeights.lexicographic(order)` both take a permutation, and
-  generate accepts `objective_order` (422 on non-permutations). The UI's
-  drag list (`state.objOrder`, `#prio-list`) is the source of that order.
+  generate accepts `objective_order` (422 on non-permutations; None =
+  the PERSISTED settings order). The UI's drag list (`state.objOrder`,
+  `#prio-list`) initializes from settings.objective_order and every
+  reorder PUTs it back (stored orders from before newer terms existed
+  are normalized: unknown dropped, missing appended). Generation is
+  CANCELLABLE: POST /api/schedule/cancel sets the module-level
+  _GenToken's event (checked via should_stop in solve/optimizer/
+  solve_v2, raising SolveCancelled) and calls stop_search() on the
+  live CpSolver; a cancelled run writes nothing.
 - Hard-constraint SETTINGS persist in the `settings` table (GET/PUT
   /api/settings): teacher_capacity, student_day_cap, single_day_max,
   and `objective_caps` (an objective at "priority 0" — dragged above the

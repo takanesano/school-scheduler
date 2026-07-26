@@ -8,6 +8,7 @@ import datetime
 import json
 import os
 import sqlite3
+import threading
 from pathlib import Path
 
 from fastapi import (Depends, FastAPI, File, HTTPException, Response,
@@ -17,10 +18,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import csv_io, db, export_xlsx, print_pdf, views
-from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, Room, Timeslot,
-                        check_input_problems, coverage_report,
-                        optimize_teacher_days, schedule_objective, solve,
-                        student_day_stats, teacher_day_stats, validate)
+from .scheduler import (OBJECTIVE_TERMS, Dataset, Lesson, Room,
+                        SolveCancelled, Timeslot, check_input_problems,
+                        coverage_report, optimize_teacher_days,
+                        schedule_objective, solve, student_day_stats,
+                        teacher_day_stats, validate)
 from .solver_v2 import ObjectiveWeights, SolverConfig, solve_v2
 
 from contextlib import asynccontextmanager
@@ -541,7 +543,8 @@ def bulk_teacher_students(body: PairBulkIn, conn=Depends(get_conn)):
 # always active out of the box; demote the card in the UI to relax it.
 DEFAULT_SETTINGS = {"teacher_capacity": 2, "student_day_cap": 2,
                     "single_day_max": 1,
-                    "objective_caps": {"student_day_gap": 0}}
+                    "objective_caps": {"student_day_gap": 0},
+                    "objective_order": list(OBJECTIVE_TERMS)}
 
 
 class SettingsIn(BaseModel):
@@ -552,6 +555,9 @@ class SettingsIn(BaseModel):
     single_day_max: int = Field(default=1, ge=1, le=10)
     # soft objectives promoted to hard constraints: term -> max value
     objective_caps: dict[str, int] = Field(default_factory=dict)
+    # the drag-sorted soft-objective priority; None = keep the stored
+    # order (so PUTs that don't touch it never reset it)
+    objective_order: list[str] | None = None
 
 
 def get_settings(conn: sqlite3.Connection) -> dict:
@@ -566,6 +572,12 @@ def get_settings(conn: sqlite3.Connection) -> dict:
                 caps = json.loads(v)
                 out[k] = {t: int(b) for t, b in caps.items()
                           if t in OBJECTIVE_TERMS}
+            elif k == "objective_order":
+                # tolerate orders stored before newer terms existed:
+                # keep the stored ranking, append missing terms after
+                arr = [t for t in json.loads(v) if t in OBJECTIVE_TERMS]
+                out[k] = arr + [t for t in OBJECTIVE_TERMS
+                                if t not in arr]
         except (ValueError, TypeError):
             pass                    # corrupt row: keep the default
     return out
@@ -593,6 +605,12 @@ def write_settings(body: SettingsIn,
             ("student_day_cap", str(body.student_day_cap)),
             ("single_day_max", str(body.single_day_max)),
             ("objective_caps", json.dumps(body.objective_caps))]
+    if body.objective_order is not None:
+        if sorted(body.objective_order) != sorted(OBJECTIVE_TERMS):
+            raise HTTPException(
+                422, "objective_order must be a permutation of "
+                     + ", ".join(OBJECTIVE_TERMS))
+        rows.append(("objective_order", json.dumps(body.objective_order)))
     with conn:
         conn.executemany(
             "INSERT INTO settings (key, value) VALUES (?, ?) "
@@ -677,6 +695,34 @@ def load_lessons(conn: sqlite3.Connection) -> list[Lesson]:
             for r in conn.execute(
                 "SELECT id, student_id, subject_id, teacher_id, room_id, "
                 "timeslot_id, locked FROM lessons ORDER BY id")]
+
+
+class _GenToken:
+    """Cancellation handle for the generation currently in flight:
+    the event stops the v1 loops, `cp` (set while CP-SAT runs) lets
+    the cancel endpoint call stop_search() from another thread."""
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.cp = None
+
+
+_CURRENT_GEN: _GenToken | None = None
+
+
+@app.post("/api/schedule/cancel")
+def cancel_generation():
+    tok = _CURRENT_GEN
+    if tok is None:
+        raise HTTPException(404, "No generation in progress")
+    tok.event.set()
+    cp = tok.cp
+    if cp is not None:
+        try:
+            cp.stop_search()
+        except Exception:
+            pass
+    return {"ok": True}
 
 
 class GenerateOptions(BaseModel):
@@ -767,6 +813,24 @@ def generate_schedule(opts: GenerateOptions,
     fixed = existing if opts.keep_existing else [
         l for l in existing if l.locked]
     s = get_settings(conn)
+    if order is None:
+        order = s["objective_order"]
+    global _CURRENT_GEN
+    token = _GenToken()
+    _CURRENT_GEN = token
+    try:
+        return _run_generation(opts, conn, order, data, problems,
+                               existing, fixed, s, token)
+    except SolveCancelled:
+        return {"cancelled": True, "complete": False, "scheduled": 0,
+                "backend": None, "v2_outcome": None, "unscheduled": [],
+                "input_problems": problems}
+    finally:
+        _CURRENT_GEN = None
+
+
+def _run_generation(opts, conn, order, data, problems, existing, fixed,
+                    s, token):
     if opts.solver == "v2":
         # exact CP-SAT optimization; validates its own output and falls
         # back to the v1 pipeline internally when it cannot do better
@@ -787,12 +851,13 @@ def generate_schedule(opts: GenerateOptions,
         # the bar to beat — a re-generate must never lose a good
         # (possibly hand-tuned or long-optimized) schedule
         result = solve_v2(data, config=cfg, fixed_lessons=fixed,
-                          incumbent=existing)
+                          incumbent=existing, cancel=token)
     else:
         result = solve(data, fixed_lessons=fixed,
                        teacher_capacity=s["teacher_capacity"],
                        student_day_cap=s["student_day_cap"],
-                       require_consecutive=_hard_consecutive(s))
+                       require_consecutive=_hard_consecutive(s),
+                       should_stop=token.event.is_set)
         if opts.compress_teacher_days:
             # user-placed lessons carry a DB id and stay pinned; only
             # solver-generated ones (id None) may be rearranged.
@@ -809,7 +874,11 @@ def generate_schedule(opts: GenerateOptions,
                 student_day_cap=s["student_day_cap"],
                 require_consecutive=_hard_consecutive(s),
                 objective_order=capped + rest,
-                single_day_max=s["single_day_max"])
+                single_day_max=s["single_day_max"],
+                should_stop=token.event.is_set)
+    if token.event.is_set():
+        # cancelled after solving finished but before writing: honor it
+        raise SolveCancelled()
     _clear_undo(conn)
     with conn:
         conn.execute("DELETE FROM lessons")
@@ -820,6 +889,7 @@ def generate_schedule(opts: GenerateOptions,
               l.timeslot_id, int(l.locked))
              for l in result.lessons])
     return {
+        "cancelled": False,
         "complete": result.complete,
         "scheduled": len(result.lessons),
         "backend": result.backend,

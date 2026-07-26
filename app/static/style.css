@@ -242,6 +242,10 @@ td.pair-soft { background: #d7e3fb; color: #1d3f8f; font-weight: 600; }
                     border-radius: 999px; transition: width 0.25s linear; }
 .gen-progress-label { font-size: 0.8rem; color: var(--muted);
                       margin-top: 0.25rem; }
+.gen-progress-row { display: flex; align-items: center; gap: 0.8rem;
+                    margin-top: 0.25rem; }
+.gen-progress-row .action { padding: 0.15rem 0.6rem;
+                            font-size: 0.78rem; }
 .gen-progress.overtime .gen-progress-bar { animation: prog-pulse 1.2s
                                            ease-in-out infinite; }
 .gen-progress.indeterminate .gen-progress-bar {
